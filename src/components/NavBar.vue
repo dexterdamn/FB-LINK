@@ -24,16 +24,22 @@
           @click="handleLoginClick"
         />
         <p class="navbar-auth-hint">
-          Uses the Facebook sign-in window (like Google). New users can create a Facebook account from that same flow.
+          Sign in with Facebook to manage pages and publish (session cookie).
         </p>
       </div>
 
-      <div v-else-if="user" class="navbar-user">
-        <div class="navbar-user-info">
+      <div v-else class="navbar-user">
+        <div v-if="user" class="navbar-user-info">
           <div class="navbar-user-name">{{ user.name }}</div>
-          <div v-if="user.email" class="navbar-user-email">{{ user.email }}</div>
         </div>
-        <img :src="user.picture" :alt="user.name" class="avatar" />
+        <div v-else class="navbar-user-placeholder">Loading session…</div>
+        <img
+          v-if="user?.picture"
+          :src="user.picture"
+          :alt="user?.name || 'Account'"
+          class="avatar"
+        />
+        <div v-else class="avatar avatar-placeholder" aria-hidden="true" />
         <button class="btn btn-secondary btn-small" @click="handleLogout" :disabled="isLoading">
           {{ isLoading ? '...' : 'Logout' }}
         </button>
@@ -164,11 +170,6 @@ const handleLogout = () => emit('logout')
   font-size: 0.95rem;
 }
 
-.navbar-user-email {
-  color: var(--text-secondary);
-  font-size: 0.85rem;
-}
-
 .avatar {
   width: 40px;
   height: 40px;
@@ -176,6 +177,16 @@ const handleLogout = () => emit('logout')
   object-fit: cover;
   background-color: var(--bg-tertiary);
   flex-shrink: 0;
+}
+
+.avatar-placeholder {
+  display: inline-block;
+  border: 1px dashed var(--border);
+}
+
+.navbar-user-placeholder {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
 }
 
 @media (max-width: 768px) {

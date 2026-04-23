@@ -6,7 +6,7 @@ A clean, organized Vue.js application that allows users to create posts and auto
 
 - **Facebook OAuth Login** - Secure authentication with Facebook accounts
 - **Post Creation** - Create posts with text and optional images
-- **Facebook Integration** - Automatically publish posts to your Facebook timeline
+- **Facebook Page publishing** - Posts from this app are sent to the Graph API (`POST /{page-id}/feed` or `/{page-id}/photos`) using a **Page access token**, so they appear on a Facebook **Page** you manage (not your personal profile timeline)
 - **Post Feed** - View all your posts in a chronological feed
 - **Social Features** - Like, share, and interact with posts
 - **Local Storage** - Posts persist across browser sessions
@@ -71,6 +71,16 @@ package.json            # Dependencies and scripts
 
 4. **Open your browser:**
    Navigate to `http://localhost:5173`
+
+## 📣 Publishing to your Facebook Page (end-to-end)
+
+1. **Create a Facebook app** in [Meta for Developers](https://developers.facebook.com/) and add **Facebook Login**. Configure **Valid OAuth Redirect URIs** (for local dev, e.g. `http://localhost:5173/auth/facebook/callback` if that origin is proxied to your API — see `server/index.js` and `FRONTEND_ORIGIN` in `.env`).
+2. **Request the right permissions** for posting to a Page (what Meta approves depends on your app mode; common examples include `pages_show_list`, `pages_manage_posts`). Set `FACEBOOK_LOGIN_SCOPES` / `VITE_FACEBOOK_LOGIN_SCOPES` if you need a custom scope string.
+3. **Sign in** with **Continue with Facebook**. The server completes OAuth, loads **Pages you manage** via Graph `me/accounts`, and stores a **session** with the **Page access token(s)**.
+4. **Create a post** in the web app. The client calls the Graph API with the selected Page’s token: text/link posts go to `/{page-id}/feed`; images use `/{page-id}/photos`.
+5. **Output:** the same content appears as a new post on that **Facebook Page** (and is also saved to your in-app feed from `PostCreator`).
+
+You do **not** paste a long-lived token into the form for normal use: tokens come from login. For automation or server-only flows you can still use a manually generated Page token with the same Graph endpoints.
 
 ## 📝 Component Overview
 
@@ -216,7 +226,7 @@ Flexbox and grid utilities, spacing, text, and responsive helpers.
 ## 🔐 Security Considerations
 
 ### Current Implementation
-- Demo mode with simulated Facebook authentication
+- Facebook OAuth (server session) and client-side Graph calls for publishing; tokens are also available to server routes under `/api/*` for alternative flows
 - Local storage for data persistence
 - Form validation on the client side
 

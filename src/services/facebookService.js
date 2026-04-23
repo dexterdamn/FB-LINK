@@ -55,6 +55,12 @@ class FacebookService {
     return `https://graph.facebook.com/${this.apiVersion}`
   }
 
+  getPageToken(pageId) {
+    if (!pageId) return null
+    const p = this.pages.find((x) => x.id === pageId)
+    return p?.access_token || null
+  }
+
   /**
    * Initialize Facebook JS SDK (single init)
    */
@@ -263,10 +269,14 @@ class FacebookService {
     this.userAccessToken = user.accessToken || null
     this.userId = user.id || null
     this.pages = Array.isArray(user.pages) ? user.pages : []
-    this.selectedPageId = user.selectedPageId || null
+    const lguId = user.lguPage?.id != null && user.lguPage.id !== '' ? String(user.lguPage.id) : null
+    const sel =
+      lguId ||
+      (user.selectedPageId != null && user.selectedPageId !== '' ? String(user.selectedPageId) : null)
+    this.selectedPageId = sel
     this.pageAccessToken = user.pageAccessToken || null
-    if (!this.pageAccessToken && this.selectedPageId && this.pages.length) {
-      const p = this.pages.find((x) => x.id === this.selectedPageId)
+    if (!this.pageAccessToken && sel && this.pages.length) {
+      const p = this.pages.find((x) => String(x.id) === sel)
       if (p?.access_token) this.pageAccessToken = p.access_token
     }
   }
@@ -441,9 +451,10 @@ class FacebookService {
   }
 
   setSelectedPage(pageId) {
-    const page = this.pages.find((p) => p.id === pageId)
+    const id = String(pageId || '')
+    const page = this.pages.find((p) => String(p.id) === id)
     if (!page?.access_token) return false
-    this.selectedPageId = page.id
+    this.selectedPageId = String(page.id)
     this.pageAccessToken = page.access_token
     return true
   }
@@ -474,7 +485,7 @@ class FacebookService {
    * POST /{page-id}/feed — message, link, picture, published (Page access token)
    * If `image` is a File, uses POST /{page-id}/photos instead.
    */
-  async publishPost(postData) {
+  async publishPostToPage({ pageId, pageAccessToken, postData }) {
     const {
       content,
       message,
@@ -489,15 +500,14 @@ class FacebookService {
       return { success: false, error: 'Add a message, link, or image to publish.' }
     }
 
-    if (!this.pageAccessToken || !this.selectedPageId) {
+    if (!pageAccessToken || !pageId) {
       return {
         success: false,
-        error: 'No Page selected. Log in and choose a Page you manage.'
+        error: 'Missing Page target (pageId / pageAccessToken).'
       }
     }
 
-    const pageId = this.selectedPageId
-    const token = this.pageAccessToken
+    const token = pageAccessToken
 
     try {
       if (image instanceof File) {
@@ -543,6 +553,20 @@ class FacebookService {
       console.error('publishPost:', e)
       return { success: false, error: e.message || 'Failed to publish.' }
     }
+  }
+
+  async publishPost(postData) {
+    if (!this.pageAccessToken || !this.selectedPageId) {
+      return {
+        success: false,
+        error: 'No Page selected. Log in and choose a Page you manage.'
+      }
+    }
+    return this.publishPostToPage({
+      pageId: this.selectedPageId,
+      pageAccessToken: this.pageAccessToken,
+      postData
+    })
   }
 
   async getFacebookPosts() {
@@ -645,34 +669,23 @@ class FacebookService {
   }
 
   /**
-   * Share a link to the user's Facebook profile using the Share Dialog.
-   *
-   * Important: Facebook does NOT allow apps to directly publish arbitrary text posts
-   * to a user's personal timeline via Graph API for most apps. The supported approach
-   * is opening a dialog (user-controlled) such as Share Dialog.
+   * Opens Facebook’s classic sharer (user-controlled). This app publishes stories via
+   * POST /{page-id}/feed only — do not use this for “posting”; it is optional link sharing.
    */
   openShareDialog({ href, quote } = {}) {
-    const link = String(href || '').trim()
+    const fallbackUrl = String(import.meta.env.VITE_FACEBOOK_SHARE_FALLBACK_URL || '').trim()
+    const link = String(href || fallbackUrl || '').trim()
     if (!link) {
-      return { success: false, error: 'A public link is required to share on your profile.' }
-    }
-    if (!this.appId) {
-      return { success: false, error: 'Missing VITE_FACEBOOK_APP_ID.' }
+      return { success: false, error: 'A public link is required to open the share dialog.' }
     }
 
-    const redirectUri =
-      typeof window !== 'undefined'
-        ? `${window.location.origin}${window.location.pathname}`
-        : 'http://localhost:8000/'
-
+    // Use the classic sharer endpoint to avoid strict App Domains requirements that
+    // can block dev tunnels / localhost. This still opens a user-controlled share UI.
     const params = new URLSearchParams()
-    params.set('app_id', this.appId)
-    params.set('display', 'popup')
-    params.set('href', link)
-    params.set('redirect_uri', redirectUri)
+    params.set('u', link)
     if (quote) params.set('quote', String(quote).slice(0, 9000))
 
-    const url = `https://www.facebook.com/dialog/share?${params.toString()}`
+    const url = `https://www.facebook.com/sharer/sharer.php?${params.toString()}`
 
     if (typeof window !== 'undefined') {
       const w = 680

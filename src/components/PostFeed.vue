@@ -1,8 +1,8 @@
 <template>
   <div class="post-feed">
     <div class="feed-header">
-      <h2>Your Feed</h2>
-      <div class="feed-filters">
+      <h2>Posts in this app</h2>
+      <div v-if="isAuthenticated" class="feed-filters">
         <button
           class="filter-btn"
           :class="{ active: sortBy === 'newest' }"
@@ -75,8 +75,10 @@ const currentUser = computed(() => user.value || {
 })
 
 const sortedPosts = computed(() => {
+  if (!props.isAuthenticated) return []
+
   const posts = [...props.posts]
-  
+
   if (sortBy.value === 'newest') {
     return posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
   } else if (sortBy.value === 'popular') {

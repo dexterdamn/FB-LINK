@@ -19,6 +19,15 @@ export default defineConfig({
       }
     }
   },
+  preview: {
+    host: 'localhost',
+    port: 8000,
+    strictPort: true,
+    proxy: {
+      '/api': { target: 'http://localhost:8001', changeOrigin: true },
+      '/auth': { target: 'http://localhost:8001', changeOrigin: true }
+    }
+  },
   build: {
     target: 'esnext',
     minify: 'terser'

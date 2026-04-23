@@ -60,14 +60,23 @@
         Share
       </button>
       <a
-        :href="facebookShareLink"
+        v-if="facebookPagePostUrl"
+        :href="facebookPagePostUrl"
         target="_blank"
         rel="noopener noreferrer"
         class="action-btn facebook-link"
       >
         <span class="action-icon">f</span>
-        View on Facebook
+        Open Page post
       </a>
+      <span
+        v-else
+        class="action-btn facebook-link facebook-page-link-placeholder"
+        title="Posts published from this app appear on your Facebook Page, not your personal profile. Older saved posts may not have a Page permalink stored."
+      >
+        <span class="action-icon">f</span>
+        No Page link
+      </span>
     </div>
 
     <div v-if="shareMenuOpen" class="share-menu">
@@ -141,9 +150,10 @@ const copySuccess = ref(false)
 
 const canDelete = computed(() => props.isAuthenticated && props.showDeleteOption)
 
-const facebookShareLink = computed(() => {
-  if (props.post.facebookUrl) return props.post.facebookUrl
-  return `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(window.location.href)}`
+/** Permalink to the post on the Facebook Page (Graph returns pageId_postId). No personal-timeline sharer. */
+const facebookPagePostUrl = computed(() => {
+  const u = props.post?.facebookUrl
+  return typeof u === 'string' && u.trim() ? u.trim() : ''
 })
 
 const whatsappShareLink = computed(() => {
@@ -385,6 +395,12 @@ const copyShareLink = () => {
 
 .facebook-link {
   text-decoration: none;
+}
+
+.facebook-page-link-placeholder {
+  cursor: default;
+  opacity: 0.72;
+  pointer-events: none;
 }
 
 .share-menu {
