@@ -36,7 +36,7 @@ const { toasts, removeToast } = useToast()
 <style scoped>
 .toast-host {
   position: fixed;
-  top: 16px;
+  bottom: 16px;
   right: 16px;
   z-index: calc(var(--z-modal) + 10);
   pointer-events: none;
@@ -137,7 +137,7 @@ const { toasts, removeToast } = useToast()
 .toast-enter-from,
 .toast-leave-to {
   opacity: 0;
-  transform: translateY(-6px);
+  transform: translateY(6px);
 }
 </style>
 
