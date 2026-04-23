@@ -1,6 +1,17 @@
 <template>
   <div class="app-container">
     <ToastHost />
+    <div v-if="showLogoutOverlay" class="fullscreen-loading" role="status" aria-live="polite">
+      <div class="fullscreen-loading__panel" role="presentation">
+        <div class="fullscreen-loading__spinnerWrap" aria-hidden="true">
+          <span class="fullscreen-loading__spinner"></span>
+        </div>
+        <div class="fullscreen-loading__content">
+          <div class="fullscreen-loading__title">Signing you out</div>
+          <div class="fullscreen-loading__subtitle">Clearing your session securely…</div>
+        </div>
+      </div>
+    </div>
     <NavBar
       :user="currentUser"
       :is-authenticated="isUserLoggedIn"
@@ -44,7 +55,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import ToastHost from './components/ToastHost.vue'
 import NavBar from './components/NavBar.vue'
 import PostCreator from './components/PostCreator.vue'
@@ -77,6 +88,8 @@ const sharedPost = ref(null)
 // FB feed sync is optional; local posts are always shown from storage.
 const isSyncingFromFacebook = ref(false)
 const syncBlockedByPermission = ref(false)
+const isLoggingOut = ref(false)
+const showLogoutOverlay = computed(() => isLoggingOut.value)
 
 onMounted(() => {
   loadPosts()
@@ -127,11 +140,20 @@ const handleLogin = async () => {
 }
 
 const handleLogout = async () => {
-  const res = await logout()
-  if (res?.success) {
-    toast.success('Logged out.')
+  isLoggingOut.value = true
+  const startedAt = performance.now()
+  // Ensure the overlay renders before any async work (prevents "no loading UI" flashes).
+  await nextTick()
+  try {
+    const res = await logout()
+    if (!res?.success && res?.error) toast.error(res.error)
+  } finally {
+    // Keep the loading overlay visible long enough to be noticeable/consistent.
+    const elapsedMs = performance.now() - startedAt
+    const remainingMs = Math.max(0, 2000 - elapsedMs)
+    if (remainingMs) await new Promise((r) => window.setTimeout(r, remainingMs))
+    isLoggingOut.value = false
   }
-  else if (res?.error) toast.error(res.error)
 }
 
 const handlePostCreated = (newPost) => {

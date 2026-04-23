@@ -40,6 +40,16 @@ refreshFromServer()
 
 export function useFacebookAuth() {
   const login = async () => {
+    // If a session already exists, don't redirect to Facebook again.
+    // This avoids bouncing the user back to "Continue to Facebook" when already logged in.
+    if (isAuthenticated.value && user.value?.id) {
+      return { success: true, alreadyLoggedIn: true }
+    }
+    const refreshed = await refreshFromServer()
+    if (refreshed?.success) {
+      return { success: true, alreadyLoggedIn: true }
+    }
+
     // Do not set isLoading: if /auth/facebook/login falls through to the SPA (no proxy /
     // API down), the page may not unload and the button would stay disabled with no UI.
     error.value = null

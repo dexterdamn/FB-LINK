@@ -47,7 +47,7 @@
     </div>
 
     <div class="post-stats">
-      <span class="stat">
+      <span v-if="(post.likes ?? 0) > 0" class="stat">
         <!-- <span class="stat-icon">👍</span> -->
         {{ post.likes }} likes
       </span>

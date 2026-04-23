@@ -413,13 +413,16 @@ async function confirmPublish() {
 
   isSubmitting.value = true
   try {
+    const base = String(import.meta.env.BASE_URL || '/')
+    const cleanBase = base.endsWith('/') ? base : `${base}/`
     let publishRes
     if (imageFile.value) {
       const fd = new FormData()
       if (!guestMode) fd.append('pageId', String(pageId))
       fd.append('message', message)
       fd.append('image', imageFile.value, imageFile.value.name || 'photo.jpg')
-      const res = await fetch(guestMode ? '/api/server/page/photo-post' : '/api/page/photo-post', {
+      const url = guestMode ? `${cleanBase}api/server/page/photo-post` : `${cleanBase}api/page/photo-post`
+      const res = await fetch(url, {
         method: 'POST',
         credentials: guestMode ? 'omit' : 'include',
         body: fd
@@ -430,7 +433,8 @@ async function confirmPublish() {
           ? { success: true, postId: data.postId, facebookUrl: data.facebookUrl }
           : { success: false, error: data.error || `Publish failed (${res.status}).` }
     } else {
-      const res = await fetch(guestMode ? '/api/server/page/post' : '/api/lgu/posts', {
+      const url = guestMode ? `${cleanBase}api/server/page/post` : `${cleanBase}api/lgu/posts`
+      const res = await fetch(url, {
         method: 'POST',
         credentials: guestMode ? 'omit' : 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -461,6 +465,16 @@ async function confirmPublish() {
         `Success: na-post na sa Facebook Page na "${confirmTargetPageName.value}". Buksan ang Page para tingnan ang Posts.`,
         { durationMs: 6500 }
       )
+      const fbUrl = typeof publishRes.facebookUrl === 'string' ? publishRes.facebookUrl.trim() : ''
+      if (fbUrl) {
+        // Facebook Pages UI can be delayed/filtered; give the user a reliable permalink.
+        try {
+          await navigator.clipboard.writeText(fbUrl)
+          toast.info(`Facebook link copied: ${fbUrl}`, { durationMs: 9000 })
+        } catch {
+          toast.info(`View on Facebook: ${fbUrl}`, { durationMs: 9000 })
+        }
+      }
     }
     showPublishConfirm.value = false
     reset()

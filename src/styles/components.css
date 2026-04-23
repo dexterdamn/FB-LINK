@@ -199,6 +199,104 @@
   to { transform: rotate(360deg); }
 }
 
+/* Fullscreen loading overlay (e.g. logout) */
+.fullscreen-loading {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(17, 24, 39, 0.35);
+  z-index: 2000;
+  padding: clamp(16px, 4vw, var(--spacing-xl));
+  overscroll-behavior: contain;
+  backdrop-filter: blur(2px);
+}
+
+.fullscreen-loading__panel {
+  width: min(560px, 100%);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: clamp(14px, 2.5vw, 18px);
+  padding: clamp(18px, 4vw, 28px);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.22);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  column-gap: clamp(14px, 3.5vw, 20px);
+  row-gap: 8px;
+}
+
+.fullscreen-loading__spinnerWrap {
+  width: clamp(64px, 16vw, 96px);
+  height: clamp(64px, 16vw, 96px);
+  display: grid;
+  place-items: center;
+}
+
+.fullscreen-loading__content {
+  min-width: 0;
+}
+
+.fullscreen-loading__title {
+  font-weight: 650;
+  font-size: clamp(1.05rem, 3.2vw, 1.35rem);
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.fullscreen-loading__subtitle {
+  margin-top: 6px;
+  font-size: clamp(0.9rem, 2.6vw, 1rem);
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+/* Fullscreen overlay spinner (two-tone ring like the screenshot) */
+.fullscreen-loading__spinner {
+  --track: rgba(96, 165, 250, 0.45); /* light blue */
+  --arc: #1d4ed8; /* darker blue */
+  --thickness: clamp(4px, 1.1vw, 7px);
+
+  width: clamp(44px, 12vw, 84px);
+  aspect-ratio: 1 / 1;
+  border-radius: 999px;
+  background: conic-gradient(var(--arc) 0 20%, var(--track) 20% 100%);
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - var(--thickness)),
+    #000 calc(100% - var(--thickness))
+  );
+  mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - var(--thickness)),
+    #000 calc(100% - var(--thickness))
+  );
+  animation: ringSpin 0.9s linear infinite;
+}
+
+@keyframes ringSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 520px) {
+  .fullscreen-loading__panel {
+    grid-template-columns: 1fr;
+    text-align: center;
+    justify-items: center;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner,
+  .fullscreen-loading__spinner {
+    animation: none;
+  }
+}
+
 /* Image Upload Styles */
 .image-preview {
   position: relative;
