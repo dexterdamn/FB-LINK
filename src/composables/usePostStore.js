@@ -69,6 +69,77 @@ export function usePostStore() {
   }
 
   /**
+   * Merge posts fetched from Facebook into local storage (no duplicates).
+   * Facebook feed items don't include images here; we keep any existing local image for same id.
+   */
+  const upsertFacebookPosts = (facebookPosts = []) => {
+    try {
+      const incoming = Array.isArray(facebookPosts) ? facebookPosts : []
+      if (!incoming.length) {
+        return { success: true, added: 0, updated: 0 }
+      }
+
+      const existing = Array.isArray(posts.value) ? posts.value : []
+      const byId = new Map(existing.map((p) => [String(p.id), p]))
+
+      let added = 0
+      let updated = 0
+
+      for (const raw of incoming) {
+        const id = raw?.id != null ? String(raw.id) : ''
+        if (!id) continue
+
+        const next = {
+          id,
+          content: String(raw?.content || ''),
+          image: null,
+          createdAt: raw?.createdAt || new Date().toISOString(),
+          likes: 0,
+          shares: 0,
+          comments: [],
+          facebookUrl: raw?.facebookUrl || null
+        }
+
+        const prev = byId.get(id)
+        if (!prev) {
+          byId.set(id, next)
+          added += 1
+          continue
+        }
+
+        // Preserve local-only fields if already present (image/likes/shares/comments).
+        const prevCreatedAt = prev.createdAt || null
+        const nextCreatedAt = next.createdAt || null
+        const createdAt =
+          prevCreatedAt && nextCreatedAt
+            ? new Date(prevCreatedAt) > new Date(nextCreatedAt)
+              ? prevCreatedAt
+              : nextCreatedAt
+            : (prevCreatedAt || nextCreatedAt || new Date().toISOString())
+        byId.set(id, {
+          ...next,
+          image: prev.image || null,
+          likes: prev.likes || 0,
+          shares: prev.shares || 0,
+          comments: Array.isArray(prev.comments) ? prev.comments : [],
+          createdAt
+        })
+        updated += 1
+      }
+
+      const merged = Array.from(byId.values()).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      posts.value = merged
+      storageService.savePosts(merged)
+
+      return { success: true, added, updated }
+    } catch (err) {
+      console.error('Error merging Facebook posts:', err)
+      error.value = 'Failed to sync posts'
+      return { success: false, error: error.value }
+    }
+  }
+
+  /**
    * Update a post
    */
   const updatePost = (postId, updates) => {
@@ -273,6 +344,7 @@ export function usePostStore() {
     error,
     loadPosts,
     addPost,
+    upsertFacebookPosts,
     updatePost,
     deletePost,
     getPostById,

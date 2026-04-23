@@ -40,15 +40,39 @@
           class="avatar"
         />
         <div v-else class="avatar avatar-placeholder" aria-hidden="true" />
-        <button class="btn btn-secondary btn-small" @click="handleLogout" :disabled="isLoading">
-          {{ isLoading ? '...' : 'Logout' }}
+        <button class="btn btn-secondary btn-small" @click="openLogoutConfirm" :disabled="isLoading">
+          Logout
         </button>
       </div>
     </div>
   </nav>
+
+  <Teleport to="body">
+    <div
+      v-if="logoutConfirmOpen"
+      class="logout-confirm-backdrop"
+      role="presentation"
+      @click.self="closeLogoutConfirm"
+    >
+      <div class="logout-confirm-dialog card" role="dialog" aria-modal="true" aria-labelledby="logout-confirm-title">
+        <h3 id="logout-confirm-title" class="logout-confirm-title">Log out?</h3>
+        <p class="logout-confirm-text">Are you sure you want to log out?</p>
+        <div class="logout-confirm-actions">
+          <button type="button" class="btn btn-secondary" :disabled="isLoading" @click="closeLogoutConfirm">
+            Cancel
+          </button>
+          <button type="button" class="btn btn-primary" :disabled="isLoading" @click="confirmLogout">
+            <span v-if="isLoading" class="logout-spinner" aria-hidden="true"></span>
+            <span>{{ isLoading ? 'Logging out…' : 'Yes, log out' }}</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
 </template>
 
 <script setup>
+import { ref, watch } from 'vue'
 import FacebookLoginButton from './FacebookLoginButton.vue'
 
 const props = defineProps({
@@ -78,7 +102,27 @@ const handleLoginClick = () => {
   emit('login')
 }
 
-const handleLogout = () => emit('logout')
+const logoutConfirmOpen = ref(false)
+
+const openLogoutConfirm = () => {
+  logoutConfirmOpen.value = true
+}
+
+const closeLogoutConfirm = () => {
+  if (props.isLoading) return
+  logoutConfirmOpen.value = false
+}
+
+const confirmLogout = () => {
+  emit('logout')
+}
+
+watch(
+  () => props.isLoading,
+  (loading) => {
+    if (!loading) logoutConfirmOpen.value = false
+  }
+)
 </script>
 
 <style scoped>
@@ -187,6 +231,59 @@ const handleLogout = () => emit('logout')
 .navbar-user-placeholder {
   font-size: 0.9rem;
   color: var(--text-secondary);
+}
+
+.logout-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-xl);
+  z-index: 1000;
+}
+
+.logout-confirm-dialog {
+  width: min(520px, 100%);
+  padding: var(--spacing-xl);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.logout-confirm-title {
+  margin: 0 0 var(--spacing-sm) 0;
+  font-size: 1.125rem;
+  color: var(--text-primary);
+}
+
+.logout-confirm-text {
+  margin: 0 0 var(--spacing-lg) 0;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.logout-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-sm);
+}
+
+.logout-spinner {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: rgba(255, 255, 255, 1);
+  animation: logoutSpin 0.8s linear infinite;
+  margin-right: 8px;
+}
+
+@keyframes logoutSpin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 @media (max-width: 768px) {

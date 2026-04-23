@@ -23,6 +23,30 @@
   grid-template-columns: 1fr 1fr;
   gap: var(--spacing-xl);
   width: 100%;
+  align-items: start;
+}
+
+/* Keep Create Post card stable; let feed scroll on desktop */
+@media (min-width: 1025px) {
+  .content-wrapper {
+    /* Use viewport height so the left card doesn't "grow" with the feed */
+    height: calc(100vh - 88px - (var(--spacing-xl) * 2));
+  }
+
+  .post-creator {
+    position: sticky;
+    top: calc(88px + var(--spacing-lg));
+    align-self: start;
+    max-height: calc(100vh - 88px - (var(--spacing-xl) * 2) - var(--spacing-lg));
+    overflow: auto;
+  }
+
+  .post-feed {
+    min-height: 0;
+    overflow: auto;
+    max-height: calc(100vh - 88px - (var(--spacing-xl) * 2));
+    padding-right: 2px; /* prevents scrollbar from clipping shadows */
+  }
 }
 
 @media (max-width: 1024px) {

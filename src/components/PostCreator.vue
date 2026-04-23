@@ -2,11 +2,11 @@
   <div class="post-creator card hover-shadow">
     <div class="creator-header">
       <h2 class="creator-title">Create Post</h2>
-      <span v-if="!isAuthenticated" class="creator-hint">Unang hakbang: mag-log in gamit ang Facebook.</span>
+      <span v-if="!isAuthenticated" class="creator-hint">Step 1: Sign in with Facebook.</span>
       <span v-else-if="publishablePages.length" class="creator-hint creator-hint-logged">
-        Ikalawang hakbang: gumawa ng post dito. Ilalathala ito sa Facebook Page na
+        Step 2: Create a post here. It will be published to the Facebook Page
         <strong>{{ confirmTargetPageName }}</strong>
-        <template v-if="publishablePages.length > 1"> (piliin sa dropdown sa ibaba)</template>.
+        <template v-if="publishablePages.length > 1"> (choose from the dropdown below)</template>.
       </span>
     </div>
 
@@ -92,7 +92,7 @@
           class="file"
           type="file"
           accept="image/*"
-          :disabled="isSubmitting"
+          :disabled="isSubmitting || !isAuthenticated"
           @change="onFileChange"
         />
 
@@ -129,18 +129,7 @@
           tabindex="-1"
           @keydown.escape.stop.prevent="cancelPublishConfirm"
         >
-          <h3 id="publish-confirm-title" class="publish-confirm-title">I-post sa Facebook Page?</h3>
-          <p class="publish-confirm-lead">
-            Naka-log in ka bilang <strong>{{ viewerDisplayName }}</strong>.
-          </p>
-          <p class="publish-confirm-text">
-            Kapag pinindot mo ang <strong>Confirm</strong>, ilalathala ang content na ito sa Facebook Page na
-            <strong>{{ confirmTargetPageName }}</strong> lang (hindi sa personal timeline / profile mo). Makikita ito sa
-            <strong>Posts</strong> ng Page na iyon sa Facebook.
-          </p>
-          <p class="publish-confirm-toast-hint">
-            Pag natanggap ito ng Facebook, lalabas ang <strong>green toast</strong> na success.
-          </p>
+          <h3 id="publish-confirm-title" class="publish-confirm-title">Post to Facebook Page?</h3>
           <p v-if="confirmTargetPageFacebookUrl" class="publish-confirm-page-link-wrap">
             <a
               :href="confirmTargetPageFacebookUrl"
@@ -149,14 +138,14 @@
               rel="noopener noreferrer"
               @click.stop
             >
-              Buksan ang Page sa Facebook (bagong tab)
+              Open the Page on Facebook (new tab)
             </a>
           </p>
           <div v-if="content.trim()" class="publish-confirm-preview">
-            <span class="publish-confirm-preview-label">Mensahe</span>
+            <span class="publish-confirm-preview-label">Message</span>
             <p class="publish-confirm-preview-body">{{ contentPreview }}</p>
           </div>
-          <p v-if="imageFile" class="publish-confirm-note">May kasamang larawan ang post.</p>
+          <p v-if="imageFile" class="publish-confirm-note">This post includes an image.</p>
           <div class="publish-confirm-actions">
             <button
               type="button"
@@ -251,7 +240,8 @@ const publishablePages = computed(() => {
 const serverTokenModeEnabled = computed(() => serverConfig.value?.publishingMode === 'server_token')
 const serverTargetPageName = computed(() => serverConfig.value?.targetPage?.name || 'LGU Page')
 
-const usingGuestPublishMode = computed(() => !props.isAuthenticated && serverTokenModeEnabled.value)
+// Posting is only allowed when logged in (even if server-token mode is configured).
+const usingGuestPublishMode = computed(() => false)
 
 /** Shows what Meta granted vs requested — helps when user is "logged in" but Pages list is empty. */
 const authScopeDebug = computed(() => {
@@ -426,6 +416,7 @@ async function confirmPublish() {
     let publishRes
     if (imageFile.value) {
       const fd = new FormData()
+      if (!guestMode) fd.append('pageId', String(pageId))
       fd.append('message', message)
       fd.append('image', imageFile.value, imageFile.value.name || 'photo.jpg')
       const res = await fetch(guestMode ? '/api/server/page/photo-post' : '/api/page/photo-post', {

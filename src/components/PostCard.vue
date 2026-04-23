@@ -12,9 +12,10 @@
     />
     <div class="post-header">
       <div class="post-user-info">
-        <img :src="userAvatar" :alt="userName" class="avatar" />
+        <!-- Temporarily hidden: user avatar + name -->
+        <!-- <img :src="userAvatar" :alt="userName" class="avatar" /> -->
+        <!-- <h4 class="user-name">{{ userName }}</h4> -->
         <div class="user-details">
-          <h4 class="user-name">{{ userName }}</h4>
           <span class="post-time">{{ formatTime(post.createdAt) }}</span>
         </div>
       </div>
@@ -47,7 +48,7 @@
 
     <div class="post-stats">
       <span class="stat">
-        <span class="stat-icon">👍</span>
+        <!-- <span class="stat-icon">👍</span> -->
         {{ post.likes }} likes
       </span>
       <span class="stat">
@@ -59,14 +60,16 @@
     <div class="divider"></div>
 
     <div class="post-actions">
+      <!-- Like action hidden for now -->
+      <!--
       <button
         class="action-btn"
         :class="{ 'liked': isLiked }"
         @click="handleLike"
       >
-        <span class="action-icon">👍</span>
         Like
       </button>
+      -->
       <button class="action-btn" @click="openShareMenu">
         <span class="action-icon">🔄</span>
         Share
@@ -245,13 +248,16 @@ const confirmDelete = async () => {
   deleteConfirmOpen.value = false
 
   const id = props.post.id
-  const looksLikeGraphPost = typeof id === 'string' && id.includes('_')
+  // Facebook Graph Page posts look like "<numericPageId>_<numericPostId>".
+  // Local app IDs also contain "_" (e.g. "post_123"), so use a strict numeric check.
+  const looksLikeGraphPost = typeof id === 'string' && /^\d+_\d+$/.test(id)
 
+  // Always allow deleting locally (web app), even if not logged in.
+  // If we can, also attempt to delete on the Facebook Page; failures should not block local deletion.
   if (looksLikeGraphPost && props.isAuthenticated) {
     const res = await facebookService.deletePost(id)
     if (!res.success) {
-      toast.error(res.error || 'Failed to delete post on Facebook.')
-      return
+      toast.error(res.error || 'Deleted in the app, but failed to delete on Facebook.')
     }
   }
 

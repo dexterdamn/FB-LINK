@@ -49,7 +49,7 @@ const DEFAULT_SCOPES =
   process.env.VITE_FACEBOOK_LOGIN_SCOPES ||
   // Page posting needs these; enable them for this app in Meta → Use cases / Permissions.
   // If Meta returns invalid_scope, set FACEBOOK_LOGIN_SCOPES in `.env` to a smaller set while testing.
-  'public_profile,email,pages_show_list,pages_manage_posts'
+  'public_profile,pages_show_list,pages_manage_posts'
 
 const PORT = Number(process.env.PORT || 8001)
 const FRONTEND_ORIGIN = String(process.env.FRONTEND_ORIGIN || 'http://localhost:8000').replace(/\/$/, '')
@@ -90,6 +90,16 @@ function requireServerPageConfig(res) {
   return true
 }
 
+function isSessionInvalidLoggedOutError(message) {
+  const m = String(message || '')
+  return /Error validating access token/i.test(m) && /user logged out/i.test(m)
+}
+
+function buildTokenInvalidHint(message) {
+  if (!isSessionInvalidLoggedOutError(message)) return null
+  return 'Access token expired/invalid (user logged out). Re-generate a fresh Facebook Page access token and update it in .env, then restart the server.'
+}
+
 async function getGrantedPermissions(accessToken) {
   const token = String(accessToken || '')
   if (!token) return { success: false, error: 'Missing access token', permissions: [] }
@@ -111,11 +121,86 @@ async function getGrantedPermissions(accessToken) {
   }
 }
 
+async function exchangeForLongLivedUserToken(shortLivedToken) {
+  const token = String(shortLivedToken || '').trim()
+  if (!token) return { success: false, error: 'Missing short-lived access token.' }
+
+  const params = new URLSearchParams()
+  params.set('grant_type', 'fb_exchange_token')
+  params.set('client_id', APP_ID)
+  params.set('client_secret', APP_SECRET)
+  params.set('fb_exchange_token', token)
+
+  const r = await fetch(`${graphBase()}/oauth/access_token?${params.toString()}`)
+  const j = await r.json().catch(() => ({}))
+  if (!r.ok || j?.error || !j?.access_token) {
+    return {
+      success: false,
+      error: j?.error?.message || `Long-lived token exchange failed (${r.status}).`,
+      details: j?.error || j
+    }
+  }
+  return {
+    success: true,
+    accessToken: j.access_token,
+    expiresIn: typeof j.expires_in === 'number' ? j.expires_in : Number(j.expires_in || 0) || null,
+    tokenType: j.token_type || null
+  }
+}
+
+async function fetchManagedPages(userAccessToken) {
+  const token = String(userAccessToken || '').trim()
+  if (!token) return { success: false, error: 'Missing user access token.' }
+
+  const pagesRes = await fetch(
+    `${graphBase()}/me/accounts?fields=id,name,access_token,category&access_token=${encodeURIComponent(token)}`
+  )
+  const pagesJson = await pagesRes.json().catch(() => ({}))
+  if (!pagesRes.ok || pagesJson?.error) {
+    return {
+      success: false,
+      error:
+        pagesJson?.error?.message ||
+        `Could not load Facebook Pages (/me/accounts) (${pagesRes.status}).`,
+      details: pagesJson?.error || pagesJson
+    }
+  }
+  return { success: true, pages: Array.isArray(pagesJson?.data) ? pagesJson.data : [] }
+}
+
+async function refreshSessionPages(session) {
+  const token = String(session?.longLivedAccessToken || session?.accessToken || '').trim()
+  if (!token) return { success: false, error: 'Missing user access token.' }
+  const pagesRes = await fetchManagedPages(token)
+  if (!pagesRes.success) return pagesRes
+  session.pages = pagesRes.pages
+  return { success: true, pages: pagesRes.pages }
+}
+
+function isFacebookTokenInvalid(errObjOrMessage) {
+  const msg =
+    typeof errObjOrMessage === 'string'
+      ? errObjOrMessage
+      : String(errObjOrMessage?.message || errObjOrMessage?.error?.message || '')
+  if (!msg) return false
+  return /Error validating access token/i.test(msg) || /\bOAuthException\b/i.test(msg)
+}
+
 function normalizeScopes(scopeString) {
   const raw = String(scopeString || '')
     .split(/[,\s]+/)
     .map((s) => s.trim())
     .filter(Boolean)
+  return [...new Set(raw)].join(',')
+}
+
+function stripDisallowedScopes(scopeString) {
+  const blocked = new Set(['email'])
+  const raw = String(scopeString || '')
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .filter((s) => !blocked.has(s))
   return [...new Set(raw)].join(',')
 }
 
@@ -132,7 +217,7 @@ function ensurePagePublishingScopes(scopeString) {
   if (scopeIncludesPageAccess(scopeString)) {
     return normalizeScopes(scopeString) || 'public_profile'
   }
-  const base = normalizeScopes(scopeString) || 'public_profile,email'
+  const base = normalizeScopes(scopeString) || 'public_profile'
   return (
     normalizeScopes(`${base},pages_show_list,pages_manage_posts,pages_read_engagement`) || base
   )
@@ -303,14 +388,14 @@ app.get('/auth/facebook/login', (req, res) => {
 
   const redirectUri = getRedirectUri()
   const state = crypto.randomBytes(16).toString('hex')
-  let requestedScopes = normalizeScopes(req.query.scopes || DEFAULT_SCOPES) || 'public_profile'
+  let requestedScopes = stripDisallowedScopes(normalizeScopes(req.query.scopes || DEFAULT_SCOPES)) || 'public_profile'
   // Old fb_retry used ?scopes=public_profile only — that blocks Page listing. If .env default includes
   // Page scopes, never allow a narrow ?scopes= query to override them.
   if (scopeIncludesPageAccess(DEFAULT_SCOPES) && !scopeIncludesPageAccess(requestedScopes)) {
     console.warn('[auth] OAuth scope query missing Page access; using FACEBOOK_LOGIN_SCOPES / server default.')
-    requestedScopes = normalizeScopes(DEFAULT_SCOPES) || 'public_profile'
+    requestedScopes = stripDisallowedScopes(normalizeScopes(DEFAULT_SCOPES)) || 'public_profile'
   }
-  requestedScopes = ensurePagePublishingScopes(requestedScopes)
+  requestedScopes = stripDisallowedScopes(ensurePagePublishingScopes(requestedScopes))
   console.log('[auth] OAuth final scope param:', requestedScopes)
 
   res.cookie('fb_oauth_state', state, {
@@ -406,8 +491,11 @@ app.get('/auth/facebook/callback', async (req, res) => {
     const accessToken = tokenJson.access_token
     if (!accessToken) return res.redirect('/?fb_error=No%20access%20token')
 
+    const ll = await exchangeForLongLivedUserToken(accessToken)
+    const userAccessToken = ll.success ? ll.accessToken : accessToken
+
     const meRes = await fetch(
-      `${graphBase()}/me?fields=id,name,email,picture.type(large)&access_token=${encodeURIComponent(accessToken)}`
+      `${graphBase()}/me?fields=id,name,email,picture.type(large)&access_token=${encodeURIComponent(userAccessToken)}`
     )
     const me = await meRes.json()
     if (me?.error) {
@@ -417,21 +505,18 @@ app.get('/auth/facebook/callback', async (req, res) => {
     }
 
     const requestedScopes = String(req.cookies?.fb_oauth_scopes || '').trim()
-    const permRes = await getGrantedPermissions(accessToken)
+    const permRes = await getGrantedPermissions(userAccessToken)
 
-    const pagesRes = await fetch(
-      `${graphBase()}/me/accounts?fields=id,name,access_token,category&access_token=${encodeURIComponent(accessToken)}`
-    )
-    const pagesJson = await pagesRes.json()
-    if (pagesJson?.error) {
+    const pagesRes = await fetchManagedPages(userAccessToken)
+    if (!pagesRes.success) {
       return res.redirect(
         `${FRONTEND_ORIGIN}/?fb_error=${encodeURIComponent(
-          pagesJson.error.message ||
+          pagesRes.error ||
             'Could not load Facebook Pages. Ensure you manage at least one Page and the app has pages_show_list/pages_manage_posts permissions enabled.'
         )}`
       )
     }
-    const pages = Array.isArray(pagesJson?.data) ? pagesJson.data : []
+    const pages = pagesRes.pages
     if (pages.length === 0) {
       console.warn('[oauth] /me/accounts returned 0 pages. requestedScopes=', requestedScopes, 'granted=', permRes.success ? permRes.permissions : permRes.error)
     }
@@ -439,7 +524,9 @@ app.get('/auth/facebook/callback', async (req, res) => {
     const sid = crypto.randomBytes(18).toString('hex')
     sessions.set(sid, {
       createdAt: Date.now(),
-      accessToken,
+      accessToken: userAccessToken,
+      longLivedAccessToken: ll.success ? ll.accessToken : null,
+      longLivedExpiresInSec: ll.success ? ll.expiresIn : null,
       user: me,
       pages,
       auth: {
@@ -608,10 +695,12 @@ app.post('/api/server/page/post', async (req, res) => {
     })
     const data = postRes.data
     if (!postRes.ok) {
+      const fbMsg = data?.error?.message || ''
       return res.status(400).json({
         success: false,
         error: data?.error?.message || `Facebook feed post failed (${postRes.status}).`,
-        details: data?.error || data
+        details: data?.error || data,
+        hint: buildTokenInvalidHint(fbMsg)
       })
     }
     const postId = data.id || null
@@ -649,10 +738,12 @@ app.post('/api/server/page/photo-post', pageImageUpload.single('image'), async (
     const r = await fetch(url, { method: 'POST', body: form })
     const data = await r.json().catch(() => ({}))
     if (!r.ok || data.error) {
+      const fbMsg = data?.error?.message || ''
       return res.status(400).json({
         success: false,
         error: data.error?.message || `Facebook photo post failed (${r.status}).`,
-        details: data.error || data
+        details: data.error || data,
+        hint: buildTokenInvalidHint(fbMsg)
       })
     }
 
@@ -835,6 +926,69 @@ app.post('/api/page/photo-post', pageImageUpload.single('image'), async (req, re
     const r = await fetch(url, { method: 'POST', body: form })
     const data = await r.json().catch(() => ({}))
     if (!r.ok || data.error) {
+      // If the Page token is invalid/expired, refresh Page tokens via /me/accounts and retry once.
+      const fbMsg = data?.error?.message || ''
+      if (isFacebookTokenInvalid(data?.error) || isSessionInvalidLoggedOutError(fbMsg)) {
+        const refreshed = await refreshSessionPages(s)
+        if (refreshed.success) {
+          const freshPage = findManagedPage(s, pageId)
+          if (freshPage?.access_token) {
+            const retryForm = new FormData()
+            retryForm.append('access_token', freshPage.access_token)
+            if (message) retryForm.append('message', message)
+            retryForm.append('published', 'true')
+            const retryBlob = new Blob([file.buffer], { type: file.mimetype || 'application/octet-stream' })
+            retryForm.append('source', retryBlob, file.originalname || 'photo.jpg')
+
+            const rr = await fetch(url, { method: 'POST', body: retryForm })
+            const rd = await rr.json().catch(() => ({}))
+            if (rr.ok && !rd?.error) {
+              const postId = rd.post_id || rd.id || null
+              const facebookUrl = buildFacebookPermalinkFromPostId(postId)
+              return res.json({
+                success: true,
+                postId,
+                facebookUrl,
+                target: { pageId, pageName: freshPage.name || null },
+                refreshed: true
+              })
+            }
+          }
+        }
+      }
+
+      // If the session-derived token is invalid because the user logged out,
+      // and server-token mode is configured for this same Page, retry using the server token.
+      if (
+        isSessionInvalidLoggedOutError(fbMsg) &&
+        serverTokenModeEnabled() &&
+        String(SERVER_PAGE_ID) === String(pageId)
+      ) {
+        try {
+          const retryForm = new FormData()
+          retryForm.append('access_token', SERVER_PAGE_ACCESS_TOKEN)
+          if (message) retryForm.append('message', message)
+          retryForm.append('published', 'true')
+          const retryBlob = new Blob([file.buffer], { type: file.mimetype || 'application/octet-stream' })
+          retryForm.append('source', retryBlob, file.originalname || 'photo.jpg')
+
+          const rr = await fetch(url, { method: 'POST', body: retryForm })
+          const rd = await rr.json().catch(() => ({}))
+          if (rr.ok && !rd?.error) {
+            const postId = rd.post_id || rd.id || null
+            const facebookUrl = buildFacebookPermalinkFromPostId(postId)
+            return res.json({
+              success: true,
+              postId,
+              facebookUrl,
+              target: { pageId, pageName: page.name || SERVER_PAGE_NAME || null },
+              fallback: 'server_token'
+            })
+          }
+        } catch (_e) {
+          // fall through to the normal error response below
+        }
+      }
       return res.status(400).json({
         success: false,
         error: data.error?.message || `Facebook photo post failed (${r.status}).`,
@@ -901,10 +1055,40 @@ app.post('/api/lgu/posts', async (req, res) => {
     })
     const data = postRes.data
     if (!postRes.ok) {
+      const fbMsg = data?.error?.message || ''
+      if (isFacebookTokenInvalid(data?.error) || isSessionInvalidLoggedOutError(fbMsg)) {
+        const refreshed = await refreshSessionPages(s)
+        if (refreshed.success) {
+          const freshPage = findManagedPage(s, pageId)
+          if (freshPage?.access_token) {
+            const retry = await createPageFeedPost({
+              pageId,
+              pageAccessToken: freshPage.access_token,
+              message,
+              link,
+              picture,
+              published
+            })
+            const rd = retry.data
+            if (retry.ok && !rd?.error) {
+              const postId = rd?.id || null
+              const facebookUrl = buildFacebookPermalinkFromPostId(postId)
+              return res.json({
+                success: true,
+                postId,
+                facebookUrl,
+                target: { pageId, pageName: freshPage.name || null },
+                refreshed: true
+              })
+            }
+          }
+        }
+      }
       return res.status(400).json({
         success: false,
         error: data?.error?.message || `Facebook feed post failed (${postRes.status}).`,
-        details: data?.error || data
+        details: data?.error || data,
+        hint: buildTokenInvalidHint(fbMsg)
       })
     }
 
@@ -1206,10 +1390,21 @@ app.get('/api/lgu/feed', async (req, res) => {
     const feedRes = await fetch(url)
     const data = await feedRes.json()
     if (!feedRes.ok || data?.error) {
+      const err = data?.error || null
+      const code = err?.code ?? null
+      const message = err?.message || ''
+      const needsPagesReadEngagement =
+        code === 10 && /pages_read_engagement/i.test(message)
+
       return res.status(400).json({
         success: false,
-        error: data?.error?.message || `Facebook feed fetch failed (${feedRes.status}).`,
-        details: data?.error || data
+        error: message || `Facebook feed fetch failed (${feedRes.status}).`,
+        details: err || data,
+        code,
+        requiredPermission: needsPagesReadEngagement ? 'pages_read_engagement' : null,
+        hint: needsPagesReadEngagement
+          ? 'Enable pages_read_engagement for your Meta app (Use cases → Pages), then log in again and accept the permission dialog.'
+          : null
       })
     }
 

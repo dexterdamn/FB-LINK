@@ -33,7 +33,7 @@
             @post-created="handlePostCreated"
           />
           <PostFeed
-            :posts="allPosts"
+            :posts="visiblePosts"
             :is-authenticated="isUserLoggedIn"
             @post-deleted="handlePostDeleted"
           />
@@ -44,7 +44,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import ToastHost from './components/ToastHost.vue'
 import NavBar from './components/NavBar.vue'
 import PostCreator from './components/PostCreator.vue'
@@ -65,13 +65,18 @@ const {
   clearError: clearLoginError,
   refreshFromServer
 } = useFacebookAuth()
-const { posts, addPost, deletePost, loadPosts, clearPosts } = usePostStore()
+const { posts, addPost, upsertFacebookPosts, deletePost, loadPosts, clearPosts } = usePostStore()
 const toast = useToast()
 
 const isUserLoggedIn = computed(() => isAuthenticated.value)
 const currentUser = computed(() => user.value)
 const allPosts = computed(() => posts.value)
+// Hide saved posts while logged out; show again after logging in.
+const visiblePosts = computed(() => (isUserLoggedIn.value ? allPosts.value : []))
 const sharedPost = ref(null)
+// FB feed sync is optional; local posts are always shown from storage.
+const isSyncingFromFacebook = ref(false)
+const syncBlockedByPermission = ref(false)
 
 onMounted(() => {
   loadPosts()
@@ -96,7 +101,9 @@ onMounted(() => {
   }
   if (fbOk) {
     refreshFromServer().then((r) => {
-      if (r?.success) toast.success('Signed in with Facebook.')
+      if (r?.success) {
+        toast.success('Signed in with Facebook.')
+      }
     })
   }
 
@@ -122,7 +129,6 @@ const handleLogin = async () => {
 const handleLogout = async () => {
   const res = await logout()
   if (res?.success) {
-    clearPosts()
     toast.success('Logged out.')
   }
   else if (res?.error) toast.error(res.error)
@@ -138,14 +144,60 @@ const handlePostCreated = (newPost) => {
 }
 
 const handlePostDeleted = (postId) => {
-  if (!isUserLoggedIn.value) {
-    toast.error('Please log in to delete posts.')
-    return
-  }
   const res = deletePost(postId)
   if (res?.success) toast.success('Post deleted.')
   else toast.error(res?.error || 'Failed to delete post.')
 }
+
+const handleSyncFromFacebook = async ({ silentIfBusy = false, silentIfNoChanges = false } = {}) => {
+  if (!isUserLoggedIn.value) {
+    toast.error('Please sign in to sync from the LGU Page.')
+    return
+  }
+  if (syncBlockedByPermission.value) {
+    if (!silentIfBusy) {
+      toast.error('Sync is blocked: enable pages_read_engagement in your Meta app, then log in again.')
+    }
+    return
+  }
+  if (isSyncingFromFacebook.value) {
+    if (!silentIfBusy) toast.info('Sync already running…')
+    return
+  }
+  isSyncingFromFacebook.value = true
+  try {
+    const res = await fetch('/api/lgu/feed?limit=25', { credentials: 'include' })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || !data?.success) {
+      if (data?.code === 10 && data?.requiredPermission === 'pages_read_engagement') {
+        syncBlockedByPermission.value = true
+        toast.error(data?.error || 'Sync requires pages_read_engagement. Enable it in Meta app settings, then log in again.')
+        return
+      }
+      toast.error(data?.error || `Failed to sync (${res.status}).`)
+      return
+    }
+    const merged = upsertFacebookPosts(Array.isArray(data.posts) ? data.posts : [])
+    if (!merged?.success) {
+      toast.error(merged?.error || 'Failed to sync posts.')
+      return
+    }
+    // Sync worked; clear any previous permission-block state.
+    syncBlockedByPermission.value = false
+    const added = merged.added || 0
+    const updated = merged.updated || 0
+    if (!(silentIfNoChanges && added === 0 && updated === 0)) {
+      toast.success(`Synced from LGU Page. Added ${added}, updated ${updated}.`)
+    }
+  } catch (e) {
+    toast.error(e?.message || 'Failed to sync posts.')
+  } finally {
+    isSyncingFromFacebook.value = false
+  }
+}
+
+// Note: we intentionally do NOT auto-sync Facebook feed on load/login,
+// because Graph feed reading may be blocked by Meta app feature gating (code 10).
 </script>
 
 <style>

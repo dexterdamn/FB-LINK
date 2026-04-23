@@ -23,6 +23,9 @@
     <div v-if="sortedPosts.length === 0" class="empty-feed">
       <div class="empty-icon">📝</div>
       <h3>No posts yet</h3>
+      <p v-if="isAuthenticated && syncBlocked" class="empty-warning">
+        Cannot fetch posts from the LGU Page yet. Please log out, log in again, and allow <code>pages_read_engagement</code>.
+      </p>
       <p v-if="isAuthenticated">Start by creating your first post above!</p>
       <p v-else>Log in with Facebook (button in the header) to publish posts here.</p>
     </div>
@@ -60,6 +63,10 @@ const props = defineProps({
   isAuthenticated: {
     type: Boolean,
     required: true
+  },
+  syncBlocked: {
+    type: Boolean,
+    default: false
   }
 })
 
@@ -81,8 +88,8 @@ const sortedPosts = computed(() => {
     return posts.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
   } else if (sortBy.value === 'popular') {
     return posts.sort((a, b) => {
-      const scoreA = (b.likes || 0) + (b.shares || 0) * 2
-      const scoreB = (a.likes || 0) + (a.shares || 0) * 2
+      const scoreA = (a.likes || 0) + (a.shares || 0) * 2
+      const scoreB = (b.likes || 0) + (b.shares || 0) * 2
       return scoreB - scoreA
     })
   }
