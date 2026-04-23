@@ -280,6 +280,21 @@ async function createPageFeedPost({ pageId, pageAccessToken, message, link, pict
   return { ok: r.ok && !j?.error, status: r.status, data: j }
 }
 
+/** Edit an existing Facebook Page post (POST /{post-id} with message). */
+async function updatePagePostMessage({ postId, pageAccessToken, message }) {
+  const params = new URLSearchParams()
+  params.set('access_token', pageAccessToken)
+  params.set('message', String(message || ''))
+
+  const r = await fetch(`${graphBase()}/${encodeURIComponent(postId)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString()
+  })
+  const j = await r.json().catch(() => null)
+  return { ok: r.ok && !j?.error, status: r.status, data: j }
+}
+
 function getRedirectUri() {
   // We always use the frontend origin since `/auth/*` is proxied to this server in dev,
   // and in prod you typically register the public site URL in Meta's Valid OAuth Redirect URIs.
@@ -1103,6 +1118,81 @@ app.post('/api/lgu/posts', async (req, res) => {
     })
   } catch (e) {
     return res.status(500).json({ success: false, error: e?.message || 'Failed to publish to LGU Page.' })
+  }
+})
+
+/**
+ * Edit an existing post on the LGU Page (message only).
+ * Route: POST /api/lgu/posts/:postId
+ * Body: { message }
+ */
+app.post('/api/lgu/posts/:postId', async (req, res) => {
+  const s = requireAuth(req, res)
+  if (!s) return
+
+  const postId = String(req.params?.postId || '').trim()
+  const message = String(req.body?.message || '').trim()
+  if (!postId) return res.status(400).json({ success: false, error: 'Missing postId.' })
+  if (!message) return res.status(400).json({ success: false, error: 'Missing message.' })
+
+  // Expect Graph Page post id format: "<pageId>_<storyId>"
+  const m = /^(\d+)_\d+$/.exec(postId)
+  if (!m) return res.status(400).json({ success: false, error: 'Invalid Facebook post id.' })
+  const pageId = m[1]
+
+  const lguCheck = assertRequestTargetsLguPage(s, pageId)
+  if (!lguCheck.ok) return res.status(400).json({ success: false, error: lguCheck.error })
+
+  const page = findManagedPage(s, pageId)
+  if (!page?.access_token) {
+    return res.status(400).json({
+      success: false,
+      error: 'LGU Page access token not found. Please re-login and select an LGU Page you manage.'
+    })
+  }
+
+  try {
+    const editRes = await updatePagePostMessage({ postId, pageAccessToken: page.access_token, message })
+    const data = editRes.data
+    if (!editRes.ok) {
+      const fbMsg = data?.error?.message || ''
+      if (isFacebookTokenInvalid(data?.error) || isSessionInvalidLoggedOutError(fbMsg)) {
+        const refreshed = await refreshSessionPages(s)
+        if (refreshed.success) {
+          const freshPage = findManagedPage(s, pageId)
+          if (freshPage?.access_token) {
+            const retry = await updatePagePostMessage({ postId, pageAccessToken: freshPage.access_token, message })
+            const rd = retry.data
+            if (retry.ok && !rd?.error) {
+              const facebookUrl = buildFacebookPermalinkFromPostId(postId)
+              return res.json({
+                success: true,
+                postId,
+                facebookUrl,
+                target: { pageId, pageName: freshPage.name || null },
+                refreshed: true
+              })
+            }
+          }
+        }
+      }
+      return res.status(400).json({
+        success: false,
+        error: data?.error?.message || `Facebook edit failed (${editRes.status}).`,
+        details: data?.error || data,
+        hint: buildTokenInvalidHint(fbMsg)
+      })
+    }
+
+    const facebookUrl = buildFacebookPermalinkFromPostId(postId)
+    return res.json({
+      success: true,
+      postId,
+      facebookUrl,
+      target: { pageId, pageName: page.name || null }
+    })
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e?.message || 'Failed to edit post.' })
   }
 })
 

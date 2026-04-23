@@ -10,6 +10,36 @@
       @confirm="confirmDelete"
       @cancel="deleteConfirmOpen = false"
     />
+    <Teleport to="body">
+      <div v-if="editOpen" class="edit-backdrop" role="presentation" @click.self="closeEdit">
+        <div
+          class="edit-dialog card"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="edit-title"
+          tabindex="-1"
+          ref="editDialogRef"
+        >
+          <h3 id="edit-title" class="edit-title">Edit post</h3>
+          <p class="edit-subtitle">
+            This updates the post in this app’s saved list. (Facebook Page posts may not update retroactively.)
+          </p>
+          <label class="edit-field">
+            <span class="edit-label">Message</span>
+            <textarea v-model="editContent" class="edit-textarea" rows="5" maxlength="500" />
+            <span class="edit-hint">{{ (editContent || '').length }}/500</span>
+          </label>
+          <div class="edit-actions">
+            <button type="button" class="btn btn-secondary" :disabled="editSaving" @click="closeEdit">
+              Cancel
+            </button>
+            <button type="button" class="btn btn-primary" :disabled="editSaving || !canSaveEdit" @click="saveEdit">
+              {{ editSaving ? 'Saving…' : 'Save changes' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
     <div class="post-header">
       <div class="post-user-info">
         <!-- Temporarily hidden: user avatar + name -->
@@ -31,6 +61,9 @@
           ⋮
         </button>
         <div v-if="menuOpen" class="post-menu" role="menu">
+          <button type="button" class="menu-item" role="menuitem" @click="handleEdit">
+            Edit
+          </button>
           <button type="button" class="menu-item menu-delete" role="menuitem" @click="handleDelete">
             Delete
           </button>
@@ -126,7 +159,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
+import { ref, computed, nextTick, onBeforeUnmount, onMounted } from 'vue'
 import { usePostStore } from '../composables/usePostStore'
 import { facebookService } from '../services/facebookService'
 import { useToast } from '../composables/useToast'
@@ -165,8 +198,13 @@ const isLiked = ref(false)
 const copySuccess = ref(false)
 const menuWrapRef = ref(null)
 const deleteConfirmOpen = ref(false)
+const editOpen = ref(false)
+const editContent = ref('')
+const editSaving = ref(false)
+const editDialogRef = ref(null)
 
 const canDelete = computed(() => props.showDeleteOption)
+const canSaveEdit = computed(() => String(editContent.value || '').trim().length > 0)
 
 /** Permalink to the post on the Facebook Page (Graph returns pageId_postId). No personal-timeline sharer. */
 const facebookPagePostUrl = computed(() => {
@@ -244,6 +282,59 @@ const handleDelete = async () => {
   deleteConfirmOpen.value = true
 }
 
+const handleEdit = async () => {
+  menuOpen.value = false
+  shareMenuOpen.value = false
+  editContent.value = String(props.post?.content || '')
+  editOpen.value = true
+  await nextTick()
+  editDialogRef.value?.focus?.()
+}
+
+const closeEdit = () => {
+  if (editSaving.value) return
+  editOpen.value = false
+}
+
+const saveEdit = async () => {
+  const nextContent = String(editContent.value || '').trim()
+  if (!nextContent) return
+
+  editSaving.value = true
+  try {
+    const id = String(props.post?.id || '')
+    const looksLikeGraphPost = typeof id === 'string' && /^\d+_\d+$/.test(id)
+
+    // If this is a real Facebook Page post and user is signed in, update it on Facebook too.
+    if (looksLikeGraphPost && props.isAuthenticated) {
+      const base = String(import.meta.env.BASE_URL || '/')
+      const cleanBase = base.endsWith('/') ? base : `${base}/`
+      const url = `${cleanBase}api/lgu/posts/${encodeURIComponent(id)}`
+      const r = await fetch(url, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: nextContent })
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || !j?.success) {
+        toast.error(j?.error || `Failed to edit on Facebook (${r.status}).`)
+        return
+      }
+    }
+
+    const res = updatePost(props.post.id, { content: nextContent })
+    if (!res?.success) {
+      toast.error(res?.error || 'Failed to update post.')
+      return
+    }
+    toast.success('Post updated.')
+    editOpen.value = false
+  } finally {
+    editSaving.value = false
+  }
+}
+
 const confirmDelete = async () => {
   deleteConfirmOpen.value = false
 
@@ -284,6 +375,83 @@ const copyShareLink = () => {
 </script>
 
 <style scoped>
+.edit-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--spacing-xl);
+  z-index: 1200;
+}
+
+.edit-dialog {
+  width: min(620px, 100%);
+  padding: clamp(16px, 4vw, 22px);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.edit-title {
+  margin: 0 0 6px 0;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+}
+
+.edit-subtitle {
+  margin: 0 0 var(--spacing-lg) 0;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.edit-label {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.edit-textarea {
+  width: 100%;
+  min-height: 120px;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 0.95rem;
+  line-height: 1.5;
+  font-family: inherit;
+}
+
+.edit-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+}
+
+.edit-hint {
+  display: block;
+  text-align: right;
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+}
+
+.edit-actions {
+  margin-top: var(--spacing-lg);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-sm);
+}
+
 .post-card {
   margin-bottom: var(--spacing-lg);
 }
