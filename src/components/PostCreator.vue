@@ -108,7 +108,7 @@
           :disabled="!canSubmit"
         >
           <span v-if="isSubmitting">Publishing…</span>
-          <span v-else>Publish</span>
+          <span v-else>Post</span>
         </button>
       </div>
     </form>

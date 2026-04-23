@@ -12,7 +12,7 @@
             </linearGradient>
           </defs>
         </svg>
-        <span>Social Echo</span>
+        <span>WEB APP</span>
       </div>
 
       <div class="navbar-spacer"></div>

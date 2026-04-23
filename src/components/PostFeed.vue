@@ -35,7 +35,7 @@
         :is-authenticated="isAuthenticated"
         :userName="currentUser.name"
         :userAvatar="currentUser.picture"
-        :show-delete-option="isAuthenticated"
+        :show-delete-option="true"
         @post-deleted="handlePostDeleted"
       />
     </div>
@@ -75,8 +75,6 @@ const currentUser = computed(() => user.value || {
 })
 
 const sortedPosts = computed(() => {
-  if (!props.isAuthenticated) return []
-
   const posts = [...props.posts]
 
   if (sortBy.value === 'newest') {

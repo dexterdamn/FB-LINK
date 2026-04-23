@@ -1,5 +1,15 @@
 <template>
   <div class="post-card card hover-shadow">
+    <ConfirmDialog
+      :open="deleteConfirmOpen"
+      title="Delete post?"
+      message="This will remove the post from this app. If you are logged in and the post is linked to Facebook, we’ll also attempt to delete it on the Page."
+      confirm-text="Delete"
+      cancel-text="Cancel"
+      :danger="true"
+      @confirm="confirmDelete"
+      @cancel="deleteConfirmOpen = false"
+    />
     <div class="post-header">
       <div class="post-user-info">
         <img :src="userAvatar" :alt="userName" class="avatar" />
@@ -8,20 +18,22 @@
           <span class="post-time">{{ formatTime(post.createdAt) }}</span>
         </div>
       </div>
-      <button
-        class="btn btn-small"
-        @click="openMenu"
-        v-if="canDelete"
-      >
-        ⋮
-      </button>
-      <div v-if="menuOpen" class="post-menu">
+      <div v-if="canDelete" class="post-menu-wrap" ref="menuWrapRef">
         <button
-          class="menu-item menu-delete"
-          @click="handleDelete"
+          type="button"
+          class="kebab-btn"
+          @click.stop="toggleMenu"
+          aria-haspopup="menu"
+          :aria-expanded="menuOpen ? 'true' : 'false'"
+          title="Post options"
         >
-          Delete Post
+          ⋮
         </button>
+        <div v-if="menuOpen" class="post-menu" role="menu">
+          <button type="button" class="menu-item menu-delete" role="menuitem" @click="handleDelete">
+            Delete
+          </button>
+        </div>
       </div>
     </div>
 
@@ -111,10 +123,11 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onBeforeUnmount, onMounted } from 'vue'
 import { usePostStore } from '../composables/usePostStore'
 import { facebookService } from '../services/facebookService'
 import { useToast } from '../composables/useToast'
+import ConfirmDialog from './ConfirmDialog.vue'
 
 const props = defineProps({
   post: {
@@ -147,8 +160,10 @@ const menuOpen = ref(false)
 const shareMenuOpen = ref(false)
 const isLiked = ref(false)
 const copySuccess = ref(false)
+const menuWrapRef = ref(null)
+const deleteConfirmOpen = ref(false)
 
-const canDelete = computed(() => props.isAuthenticated && props.showDeleteOption)
+const canDelete = computed(() => props.showDeleteOption)
 
 /** Permalink to the post on the Facebook Page (Graph returns pageId_postId). No personal-timeline sharer. */
 const facebookPagePostUrl = computed(() => {
@@ -186,7 +201,7 @@ const formatTime = (timestamp) => {
   })
 }
 
-const openMenu = () => {
+const toggleMenu = () => {
   menuOpen.value = !menuOpen.value
   shareMenuOpen.value = false
 }
@@ -196,20 +211,43 @@ const openShareMenu = () => {
   menuOpen.value = false
 }
 
+function closeMenus() {
+  menuOpen.value = false
+  shareMenuOpen.value = false
+}
+
+function onDocumentPointerDown(e) {
+  const wrap = menuWrapRef.value
+  if (!wrap) return
+  const target = e?.target
+  if (target && wrap.contains(target)) return
+  closeMenus()
+}
+
+onMounted(() => {
+  document.addEventListener('pointerdown', onDocumentPointerDown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocumentPointerDown)
+})
+
 const handleDelete = async () => {
   if (!canDelete.value) {
-    toast.error('Please log in to delete posts.')
     menuOpen.value = false
     return
   }
-  if (!confirm('Are you sure you want to delete this post?')) return
-
   menuOpen.value = false
+  deleteConfirmOpen.value = true
+}
+
+const confirmDelete = async () => {
+  deleteConfirmOpen.value = false
 
   const id = props.post.id
   const looksLikeGraphPost = typeof id === 'string' && id.includes('_')
 
-  if (looksLikeGraphPost) {
+  if (looksLikeGraphPost && props.isAuthenticated) {
     const res = await facebookService.deletePost(id)
     if (!res.success) {
       toast.error(res.error || 'Failed to delete post on Facebook.')
@@ -252,6 +290,39 @@ const copyShareLink = () => {
   position: relative;
 }
 
+.post-menu-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.kebab-btn {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background-color: var(--bg-primary);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  line-height: 1;
+  font-size: 18px;
+}
+
+.kebab-btn:hover {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.kebab-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: 2px;
+}
+
 .post-user-info {
   display: flex;
   align-items: center;
@@ -286,6 +357,7 @@ const copyShareLink = () => {
   z-index: var(--z-dropdown);
   min-width: 150px;
   overflow: hidden;
+  margin-top: var(--spacing-sm);
 }
 
 .menu-item {
