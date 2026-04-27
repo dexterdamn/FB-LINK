@@ -15,27 +15,32 @@
       class="page-missing-banner"
       role="alert"
     >
-      <p class="page-missing-title">Walang Facebook Page na naka-load sa session mo.</p>
+      <p class="page-missing-title">No Facebook Page is available in your session.</p>
       <p class="page-missing-text">
-        Kaya walang dropdown: kailangan ng Facebook login na may permiso para sa mga Page na pinamamahalaan mo
+        That’s why there’s no dropdown: you need a Facebook login with permission to access the Pages you manage
         (<code>pages_show_list</code>, <code>pages_manage_posts</code>).
       </p>
       <p v-if="authScopeDebug" class="page-missing-debug">
-        <span class="page-missing-debug-label">Debug (mula sa huling login):</span><br />
+        <span class="page-missing-debug-label">Debug (from the last login):</span><br />
         {{ authScopeDebug }}
       </p>
       <div class="page-missing-actions">
         <button type="button" class="btn btn-primary btn-small" @click="reconnectFacebookForPages">
-          Ayusin ang Page access — mag-login muli sa Facebook
+          Fix Page access — sign in to Facebook again
         </button>
       </div>
       <ol class="page-missing-steps">
         <li>
-          Pindutin ang button sa itaas (mag-<strong>logout</strong> at bubuksan ang Facebook na may
-          <code>auth_type=rerequest</code>) — <strong>piliin / payagan ang lahat</strong> ng access para sa Pages.
+          Click the button above (it will <strong>log out</strong> and open Facebook with
+          <code>auth_type=rerequest</code>) — <strong>select / allow all</strong> requested access for Pages.
         </li>
-        <li>Sa <a href="https://developers.facebook.com/" target="_blank" rel="noopener noreferrer">Meta App Dashboard</a>: naka-enable ang <code>pages_show_list</code> at <code>pages_manage_posts</code> (Use cases → Pages).</li>
-        <li>I-restart ang API pagkatapos baguhin ang <code>.env</code>; tiyaking may laman ang <code>FACEBOOK_LOGIN_SCOPES</code> kasama ang Page scopes.</li>
+        <li>
+          In the <a href="https://developers.facebook.com/" target="_blank" rel="noopener noreferrer">Meta App Dashboard</a>, enable
+          <code>pages_show_list</code> and <code>pages_manage_posts</code> (Use cases → Pages).
+        </li>
+        <li>
+          Restart the API after updating <code>.env</code>. Make sure <code>FACEBOOK_LOGIN_SCOPES</code> includes the Page scopes.
+        </li>
       </ol>
     </div>
 
@@ -333,7 +338,7 @@ const authScopeDebug = computed(() => {
   const req = typeof a.requestedScopes === 'string' ? a.requestedScopes : ''
   const gr = Array.isArray(a.grantedPermissions) ? a.grantedPermissions.join(', ') : ''
   if (!req && !gr) return ''
-  return `Hiniling na scopes: ${req || '(unknown)'}\nNa-grant: ${gr || '(wala — kailangan payagan sa Facebook dialog)'}` 
+  return `Requested scopes: ${req || '(unknown)'}\nGranted: ${gr || '(none — allow them in the Facebook dialog)'}` 
 })
 
 const publishTargetPageId = ref('')
@@ -540,7 +545,7 @@ const handleSubmit = () => {
 
   if (props.isAuthenticated && !publishablePages.value.length) {
     toast.error(
-      'Walang Facebook Page sa session. Mag-logout, ayusin ang Page permissions sa Meta / .env, tapos mag-login muli.'
+      'No Facebook Page is available in your session. Log out, fix the Page permissions in Meta / .env, then sign in again.'
     )
     return
   }

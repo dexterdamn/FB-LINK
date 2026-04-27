@@ -74,7 +74,7 @@ class FacebookService {
 
       if (typeof window !== 'undefined' && window.location.protocol === 'file:') {
         fail(
-          'Hindi gagana ang Facebook Login kapag naka-file://. Buksan ang app gamit ang dev server (hal. npm run dev → http://localhost:5173).'
+          'Facebook Login will not work when running on file://. Open the app using the dev server (e.g. npm run dev → http://localhost:5173).'
         )
         return
       }
@@ -88,7 +88,7 @@ class FacebookService {
           hostname === '0.0.0.0'
         if (protocol !== 'https:' && !isLocalhost) {
           fail(
-            `Hindi na puwedeng tumawag ng FB.login sa HTTP pages. Buksan ang app sa HTTPS (hal. https://${hostname}${port ? `:${port}` : ''}). (Meta requires HTTPS for Facebook Login.)`
+            `FB.login cannot be used on HTTP pages. Open the app on HTTPS (e.g. https://${hostname}${port ? `:${port}` : ''}). (Meta requires HTTPS for Facebook Login.)`
           )
           return
         }
@@ -96,7 +96,7 @@ class FacebookService {
 
       if (!this.appId) {
         fail(
-          'Walang VITE_FACEBOOK_APP_ID. Gumawa ng .env sa project root, idagdag ang ID, tapos i-restart ang Vite (npm run dev).'
+          'Missing VITE_FACEBOOK_APP_ID. Create a .env file in the project root, add the App ID, then restart Vite (npm run dev).'
         )
         return
       }
@@ -106,7 +106,7 @@ class FacebookService {
         if (settled) return
         settled = true
         fail(
-          'Hindi na-load ang Facebook SDK sa loob ng 25s. Subukan: i-off ang ad blocker para sa connect.facebook.net, o tingnan ang internet.'
+          'Facebook SDK did not load within 25s. Try disabling your ad blocker for connect.facebook.net or check your internet connection.'
         )
       }, 25000)
 
@@ -130,7 +130,7 @@ class FacebookService {
             version: this.apiVersion
           })
           if (typeof window.FB.login !== 'function') {
-            done(() => fail('Facebook SDK ay na-init pero walang FB.login — subukang i-refresh ang pahina.'))
+            done(() => fail('Facebook SDK initialized but FB.login is missing — try refreshing the page.'))
             return
           }
           done(() => resolve())
@@ -157,7 +157,7 @@ class FacebookService {
       script.async = true
       script.defer = true
       script.onerror = () =>
-        done(() => fail('Bumagsak ang pag-load ng connect.facebook.net/sdk.js (ad blocker, CSP, o network).'))
+        done(() => fail('Failed to load connect.facebook.net/sdk.js (ad blocker, CSP, or network issue).'))
       document.body.appendChild(script)
     })
 
@@ -301,7 +301,7 @@ class FacebookService {
         return {
           success: false,
           error:
-            'Handa na dapat ang Facebook SDK bago mag-login. I-refresh ang pahina o tingnan ang Console para sa error.'
+            'Facebook SDK must be ready before signing in. Refresh the page or check the Console for errors.'
         }
       }
 
@@ -325,8 +325,8 @@ class FacebookService {
 
               let msg =
                 response?.status === 'not_authorized'
-                  ? 'Hindi pinayagan ang app sa Facebook. Pindutin muli at tanggapin ang lahat ng hinihinging pahintulot (lalo na para sa Pages).'
-                  : 'Kinansel ang login o walang token na bumalik. Subukan muli; tingnan din kung hindi na-block ang pop-up ng browser.'
+                  ? 'The app was not authorized on Facebook. Try again and accept all requested permissions (especially for Pages).'
+                  : 'Login was cancelled or no token was returned. Try again and make sure your browser is not blocking pop-ups.'
 
               if (response?.errorMessage) {
                 msg = `${msg} (${response.errorMessage})`
@@ -342,7 +342,7 @@ class FacebookService {
         } catch (e) {
           resolve({
             ok: false,
-            error: e?.message || 'Hindi natuloy ang FB.login (maaaring na-block ang pop-up).'
+            error: e?.message || 'FB.login failed (the pop-up may have been blocked).'
           })
         }
       })

@@ -97,25 +97,27 @@
                     </div>
                   </div>
 
-                  <div
-                    v-if="existingImageMedia.length"
-                    class="post-media post-media--images"
-                    :class="{ 'post-media--single': existingImageMedia.length === 1 && !existingVideoMedia.length }"
-                  >
-                    <div
-                      v-for="(m, idx) in existingVisibleImageMedia"
-                      :key="`edit_img_${m.url}_${idx}`"
-                      class="post-media-item"
-                      :class="{ 'post-media-item--single': existingImageMedia.length === 1 && !existingVideoMedia.length }"
-                    >
-                      <img :src="m.url" :alt="editContent || ''" />
-                      <div
-                        v-if="idx === 3 && existingExtraImageCount > 0"
-                        class="post-media-more"
-                        aria-hidden="true"
+                  <div v-if="existingImageMedia.length" class="edit-current-gallery" aria-label="Current images">
+                    <div class="edit-current-gallery__header">
+                      <span class="edit-current-gallery__count">
+                        {{ existingImageMedia.length }} image{{ existingImageMedia.length === 1 ? '' : 's' }}
+                      </span>
+                      <span class="edit-current-gallery__hint">Click a thumbnail to view.</span>
+                    </div>
+
+                    <div class="edit-current-gallery__grid" role="list">
+                      <button
+                        v-for="(m, idx) in existingImageMedia"
+                        :key="`edit_img_${m.url}_${idx}`"
+                        type="button"
+                        class="edit-current-gallery__thumb"
+                        role="listitem"
+                        :disabled="editMediaMode === 'remove'"
+                        :aria-label="`View current image ${idx + 1} of ${existingImageMedia.length}`"
+                        @click="openImageViewer(idx)"
                       >
-                        +{{ existingExtraImageCount }}
-                      </div>
+                        <img :src="m.url" :alt="editContent || 'Current image'" loading="lazy" />
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1175,26 +1177,87 @@ const handleLike = () => {
   gap: 8px;
 }
 
-.edit-current-preview .post-media-item img,
 .edit-current-preview .post-media-item video {
   height: 170px;
 }
 
-.edit-current-preview .post-media--single .post-media-item img {
-  height: auto;
-  aspect-ratio: 16 / 9;
+.edit-current-gallery {
+  display: grid;
+  gap: 10px;
+}
+
+.edit-current-gallery__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.edit-current-gallery__count {
+  font-weight: 650;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.edit-current-gallery__hint {
+  color: var(--text-tertiary);
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.edit-current-gallery__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
   max-height: 240px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.edit-current-gallery__thumb {
+  position: relative;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #0b1220;
+  overflow: hidden;
+  padding: 0;
+  cursor: zoom-in;
+  aspect-ratio: 16 / 10;
+  transition: transform 120ms ease, box-shadow 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+.edit-current-gallery__thumb img {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
+  display: block;
+}
+
+.edit-current-gallery__thumb:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+  border-color: color-mix(in srgb, var(--border) 60%, var(--text-primary));
+}
+
+.edit-current-gallery__thumb:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 70%, white);
+  outline-offset: 2px;
+}
+
+.edit-current-gallery__thumb:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 @media (max-width: 520px) {
-  .edit-current-preview .post-media-item img,
   .edit-current-preview .post-media-item video {
     height: 150px;
   }
 
-  .edit-current-preview .post-media--single .post-media-item img {
-    max-height: 210px;
+  .edit-current-gallery__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-height: 220px;
   }
 }
 
