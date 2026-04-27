@@ -80,27 +80,50 @@
                 :multiple="true"
                 @files-selected="onEditDropzoneFilesSelected"
               />
-              <div v-if="editMediaPreviews.length" class="edit-media-grid">
-                <div v-for="(p, idx) in editMediaPreviews" :key="p.key" class="edit-media-item">
-                  <button
-                    type="button"
-                    class="edit-media-remove"
-                    :disabled="editSaving"
-                    aria-label="Remove image"
-                    title="Remove image"
-                    @click="removeEditMediaAt(idx)"
-                  >
-                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                      <path
-                        d="M18 6L6 18M6 6l12 12"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                      />
-                    </svg>
-                  </button>
-                  <img :src="p.url" :alt="`Selected image ${idx + 1}`" />
+              <div v-if="editMediaPreviews.length" class="edit-media-list" role="list">
+                <div v-for="(p, idx) in editMediaPreviews" :key="p.key" class="edit-media-row" role="listitem">
+                  <div class="edit-media-thumb" aria-hidden="true">
+                    <img :src="p.url" alt="" />
+                  </div>
+
+                  <div class="edit-media-meta">
+                    <div class="edit-media-name" :title="p.name">{{ p.name }}</div>
+                    <div class="edit-media-size">{{ formatBytes(editMediaFiles[idx]?.size) }}</div>
+                  </div>
+
+                  <div class="edit-media-actions">
+                    <span class="edit-media-status" aria-hidden="true" title="Ready">
+                      <svg viewBox="0 0 24 24" focusable="false">
+                        <path
+                          d="M20 6L9 17l-5-5"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2.6"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        />
+                      </svg>
+                    </span>
+
+                    <button
+                      type="button"
+                      class="edit-media-removeBtn"
+                      :disabled="editSaving"
+                      aria-label="Remove image"
+                      title="Remove image"
+                      @click="removeEditMediaAt(idx)"
+                    >
+                      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path
+                          d="M18 6L6 18M6 6l12 12"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2.5"
+                          stroke-linecap="round"
+                        />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -604,6 +627,15 @@ function removeEditMediaAt(idx) {
   editMediaPreviews.value.splice(i, 1)
 }
 
+function formatBytes(bytes) {
+  const n = Number(bytes)
+  if (!Number.isFinite(n) || n <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  const i = Math.min(Math.floor(Math.log(n) / Math.log(1024)), units.length - 1)
+  const v = n / Math.pow(1024, i)
+  return `${v.toFixed(i === 0 ? 0 : 2)} ${units[i]}`
+}
+
 const saveEdit = async () => {
   const nextContent = String(editContent.value || '').trim()
   if (!nextContent) return
@@ -1009,59 +1041,118 @@ const handleLike = () => {
   background-color: var(--bg-tertiary);
 }
 
-.edit-media-grid {
+.edit-media-list {
   margin-top: 10px;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
-.edit-media-item {
-  position: relative;
-  border-radius: var(--radius-lg);
-  overflow: hidden;
+.edit-media-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  column-gap: 12px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
-  background-color: var(--bg-tertiary);
+  border-radius: 12px;
+  background: var(--bg-primary);
 }
 
-.edit-media-item img {
+.edit-media-thumb {
+  width: 52px;
+  height: 36px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+}
+
+.edit-media-thumb img {
   width: 100%;
-  height: 160px;
+  height: 100%;
   object-fit: cover;
   display: block;
 }
 
-.edit-media-remove {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  width: 30px;
-  height: 30px;
-  padding: 0;
+.edit-media-meta {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.edit-media-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 0.92rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.edit-media-size {
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.edit-media-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.edit-media-status {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: color-mix(in srgb, var(--accent) 78%, #0f172a);
+  display: grid;
+  place-items: center;
+}
+
+.edit-media-status svg {
+  width: 16px;
+  height: 16px;
+}
+
+.edit-media-removeBtn {
+  width: 28px;
+  height: 28px;
   border-radius: 999px;
   border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-primary) 80%, transparent);
-  color: var(--text-primary);
+  background: color-mix(in srgb, var(--bg-secondary) 70%, transparent);
+  color: var(--text-secondary);
   display: grid;
   place-items: center;
   cursor: pointer;
+  padding: 0;
   line-height: 0;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+  transition: background-color 120ms ease, border-color 120ms ease, transform 120ms ease, opacity 120ms ease;
 }
 
-.edit-media-remove svg {
-  width: 16px;
-  height: 16px;
-  display: block;
+.edit-media-removeBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--bg-secondary) 90%, transparent);
+  border-color: color-mix(in srgb, var(--border) 70%, var(--text-primary));
+  transform: translateY(-1px);
 }
 
-@media (max-width: 520px) {
-  .edit-media-grid {
-    grid-template-columns: 1fr;
-  }
-  .edit-media-item img {
-    height: 200px;
-  }
+.edit-media-removeBtn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.edit-media-removeBtn:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 70%, white);
+  outline-offset: 2px;
+}
+
+.edit-media-removeBtn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.edit-media-removeBtn svg {
+  width: 14px;
+  height: 14px;
 }
 
 .post-card {
