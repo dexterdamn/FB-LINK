@@ -75,7 +75,7 @@
 
       <div class="field">
         <div class="field-row">
-          <span class="label">Image (optional)</span>
+          <span class="label">Image</span>
           <button
             v-if="imageFile || imagePreviewUrl"
             type="button"
@@ -87,13 +87,11 @@
           </button>
         </div>
 
-        <input
-          ref="fileInput"
-          class="file"
-          type="file"
-          accept="image/*"
+        <ImageDropzone
           :disabled="isSubmitting || !isAuthenticated"
-          @change="onFileChange"
+          title="Click to upload an image"
+          subtitle="PNG, JPG, GIF — up to 10MB"
+          @file-selected="onDropzoneFileSelected"
         />
 
         <div v-if="imagePreviewUrl" class="preview">
@@ -175,6 +173,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { facebookService } from '../services/facebookService'
 import { useFacebookAuth } from '../composables/useFacebookAuth'
 import { useToast } from '../composables/useToast'
+import ImageDropzone from './ImageDropzone.vue'
 
 const props = defineProps({
   isAuthenticated: {
@@ -324,6 +323,19 @@ function readFileAsDataUrl(file) {
 const onFileChange = async (e) => {
   const file = e?.target?.files?.[0]
   if (!file) return
+  imageFile.value = file
+  try {
+    imagePreviewUrl.value = await readFileAsDataUrl(file)
+  } catch (err) {
+    imageFile.value = null
+    imagePreviewUrl.value = ''
+    toast.error(err?.message || 'Could not load image preview.')
+  }
+}
+
+const onDropzoneFileSelected = async (file) => {
+  if (!file) return
+  if (fileInput.value) fileInput.value.value = ''
   imageFile.value = file
   try {
     imagePreviewUrl.value = await readFileAsDataUrl(file)

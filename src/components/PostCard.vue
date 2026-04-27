@@ -44,7 +44,7 @@
           </label>
           <div class="edit-field">
             <div class="edit-image-row">
-              <span class="edit-label">Image (optional)</span>
+              <span class="edit-label">Image</span>
               <button
                 v-if="editImagePreviewUrl"
                 type="button"
@@ -55,13 +55,11 @@
                 Remove
               </button>
             </div>
-            <input
-              ref="editFileInputRef"
-              class="edit-file"
-              type="file"
-              accept="image/*"
+            <ImageDropzone
               :disabled="editSaving"
-              @change="onEditFileChange"
+              title="Click to upload an image"
+              subtitle="PNG, JPG, GIF — up to 10MB"
+              @file-selected="onEditDropzoneFileSelected"
             />
             <div v-if="editImagePreviewUrl" class="edit-preview">
               <img :src="editImagePreviewUrl" alt="Selected image preview" />
@@ -122,10 +120,6 @@
         <!-- <span class="stat-icon">👍</span> -->
         {{ post.likes }} likes
       </span>
-      <span class="stat">
-        <span class="stat-icon">🔄</span>
-        {{ post.shares }} shares
-      </span>
     </div>
 
     <div class="divider"></div>
@@ -141,10 +135,6 @@
         Like
       </button>
       -->
-      <button class="action-btn" @click="openShareMenu">
-        <span class="action-icon">🔄</span>
-        Share
-      </button>
       <a
         v-if="facebookPagePostUrl"
         :href="facebookPagePostUrl"
@@ -165,34 +155,6 @@
       </span>
     </div>
 
-    <div v-if="shareMenuOpen" class="share-menu">
-      <button
-        class="menu-item"
-        @click="copyShareLink"
-      >
-        📋 Copy Link
-      </button>
-      <a
-        :href="whatsappShareLink"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="menu-item"
-      >
-        💬 Share on WhatsApp
-      </a>
-      <a
-        :href="twitterShareLink"
-        target="_blank"
-        rel="noopener noreferrer"
-        class="menu-item"
-      >
-        𝕏 Share on Twitter
-      </a>
-    </div>
-
-    <div v-if="copySuccess" class="copy-feedback">
-      Link copied! 📋
-    </div>
   </div>
 </template>
 
@@ -202,6 +164,7 @@ import { usePostStore } from '../composables/usePostStore'
 import { facebookService } from '../services/facebookService'
 import { useToast } from '../composables/useToast'
 import ConfirmDialog from './ConfirmDialog.vue'
+import ImageDropzone from './ImageDropzone.vue'
 
 const props = defineProps({
   post: {
@@ -231,9 +194,7 @@ const { updatePost } = usePostStore()
 const toast = useToast()
 
 const menuOpen = ref(false)
-const shareMenuOpen = ref(false)
 const isLiked = ref(false)
-const copySuccess = ref(false)
 const menuWrapRef = ref(null)
 const deleteConfirmOpen = ref(false)
 const editOpen = ref(false)
@@ -242,7 +203,6 @@ const editSaving = ref(false)
 const editDialogRef = ref(null)
 const editImageFile = ref(null)
 const editImagePreviewUrl = ref('')
-const editFileInputRef = ref(null)
 const operationOverlayOpen = ref(false)
 const operationOverlayTitle = ref('')
 const operationOverlaySubtitle = ref('')
@@ -277,15 +237,6 @@ const facebookPagePostUrl = computed(() => {
   return typeof u === 'string' && u.trim() ? u.trim() : ''
 })
 
-const whatsappShareLink = computed(() => {
-  const text = encodeURIComponent(`Check this out: ${props.post.content.substring(0, 100)}...`)
-  return `https://wa.me/?text=${text}`
-})
-
-const twitterShareLink = computed(() => {
-  const text = encodeURIComponent(`Check this out: ${props.post.content.substring(0, 100)}...`)
-  return `https://twitter.com/intent/tweet?text=${text}`
-})
 
 const formatTime = (timestamp) => {
   const date = new Date(timestamp)
@@ -309,17 +260,10 @@ const formatTime = (timestamp) => {
 
 const toggleMenu = () => {
   menuOpen.value = !menuOpen.value
-  shareMenuOpen.value = false
-}
-
-const openShareMenu = () => {
-  shareMenuOpen.value = !shareMenuOpen.value
-  menuOpen.value = false
 }
 
 function closeMenus() {
   menuOpen.value = false
-  shareMenuOpen.value = false
 }
 
 function onDocumentPointerDown(e) {
@@ -349,11 +293,9 @@ const handleDelete = async () => {
 
 const handleEdit = async () => {
   menuOpen.value = false
-  shareMenuOpen.value = false
   editContent.value = String(props.post?.content || '')
   editImageFile.value = null
   editImagePreviewUrl.value = typeof props.post?.image === 'string' ? props.post.image : ''
-  if (editFileInputRef.value) editFileInputRef.value.value = ''
   editOpen.value = true
   await nextTick()
   editDialogRef.value?.focus?.()
@@ -373,8 +315,7 @@ function readFileAsDataUrl(file) {
   })
 }
 
-const onEditFileChange = async (e) => {
-  const file = e?.target?.files?.[0]
+const onEditDropzoneFileSelected = async (file) => {
   if (!file) return
   editImageFile.value = file
   try {
@@ -389,7 +330,6 @@ const onEditFileChange = async (e) => {
 const clearEditImage = () => {
   editImageFile.value = null
   editImagePreviewUrl.value = ''
-  if (editFileInputRef.value) editFileInputRef.value.value = ''
 }
 
 const saveEdit = async () => {
@@ -567,17 +507,6 @@ const handleLike = () => {
   updatePost(props.post.id, { likes: newLikes })
 }
 
-const copyShareLink = () => {
-  const link = `${window.location.origin}?post=${props.post.id}`
-  navigator.clipboard.writeText(link)
-  copySuccess.value = true
-  shareMenuOpen.value = false
-  toast.success('Link copied.')
-
-  setTimeout(() => {
-    copySuccess.value = false
-  }, 2000)
-}
 </script>
 
 <style scoped>
@@ -663,10 +592,6 @@ const copyShareLink = () => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-
-.edit-file {
-  width: 100%;
 }
 
 .edit-preview {
@@ -882,63 +807,7 @@ const copyShareLink = () => {
   pointer-events: none;
 }
 
-.share-menu {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  background-color: var(--bg-primary);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-md);
-  z-index: var(--z-dropdown);
-  min-width: 200px;
-  overflow: hidden;
-  margin-top: var(--spacing-md);
-}
-
-.share-menu .menu-item,
-.share-menu a {
-  display: block;
-  width: 100%;
-  padding: var(--spacing-md);
-  border: none;
-  background: none;
-  color: var(--text-primary);
-  text-align: left;
-  cursor: pointer;
-  transition: background-color 0.2s ease;
-  font-size: 0.95rem;
-  text-decoration: none;
-}
-
-.share-menu .menu-item:hover,
-.share-menu a:hover {
-  background-color: var(--bg-secondary);
-}
-
-.copy-feedback {
-  position: fixed;
-  bottom: var(--spacing-lg);
-  right: var(--spacing-lg);
-  background-color: var(--success);
-  color: white;
-  padding: var(--spacing-md) var(--spacing-lg);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
-  z-index: var(--z-modal);
-  animation: slideInUp 0.3s ease;
-}
-
-@keyframes slideInUp {
-  from {
-    transform: translateY(20px);
-    opacity: 0;
-  }
-  to {
-    transform: translateY(0);
-    opacity: 1;
-  }
-}
+/* Share UI removed */
 
 @media (max-width: 480px) {
   .post-actions {
