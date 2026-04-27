@@ -44,6 +44,7 @@ export function usePostStore() {
         id: post.id || `post_${Date.now()}`,
         content: post.content,
         image: post.image || null,
+        media: Array.isArray(post.media) ? post.media : (post.media ? [post.media] : null),
         createdAt: post.createdAt || new Date().toISOString(),
         likes: post.likes || 0,
         shares: post.shares || 0,

@@ -55,21 +55,40 @@
   --z-tooltip: 1100;
 }
 
-/* Dark Mode - Optional Future Enhancement */
+/* Theme overrides */
+:root[data-theme='dark'] {
+  --primary: #f3f4f6;
+  --primary-light: #e5e7eb;
+  --primary-dark: #ffffff;
+
+  --bg-primary: #111827;
+  --bg-secondary: #1f2937;
+  --bg-tertiary: #374151;
+
+  --text-primary: #f3f4f6;
+  --text-secondary: #d1d5db;
+  --text-tertiary: #9ca3af;
+
+  --border: #374151;
+  --border-light: #1f2937;
+  --divider: #4b5563;
+}
+
+/* If user did not set a theme, respect OS preference */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme='light']):not([data-theme='dark']) {
     --primary: #f3f4f6;
     --primary-light: #e5e7eb;
     --primary-dark: #ffffff;
-    
+
     --bg-primary: #111827;
     --bg-secondary: #1f2937;
     --bg-tertiary: #374151;
-    
+
     --text-primary: #f3f4f6;
     --text-secondary: #d1d5db;
     --text-tertiary: #9ca3af;
-    
+
     --border: #374151;
     --border-light: #1f2937;
     --divider: #4b5563;

@@ -17,8 +17,10 @@
       :is-authenticated="isUserLoggedIn"
       :is-loading="authLoading"
       :sdk-preparing="facebookSdkPreparing"
+      :theme="theme"
       @login="handleLogin"
       @logout="handleLogout"
+      @toggle-theme="toggleTheme"
     />
 
     <main class="main-content">
@@ -64,6 +66,7 @@ import { useFacebookAuth } from './composables/useFacebookAuth'
 import { usePostStore } from './composables/usePostStore'
 import { useToast } from './composables/useToast'
 import { storageService } from './services/storageService'
+import { useTheme } from './composables/useTheme'
 
 const {
   isAuthenticated,
@@ -78,6 +81,7 @@ const {
 } = useFacebookAuth()
 const { posts, addPost, upsertFacebookPosts, deletePost, loadPosts, clearPosts } = usePostStore()
 const toast = useToast()
+const { theme, toggleTheme } = useTheme()
 
 const isUserLoggedIn = computed(() => isAuthenticated.value)
 const currentUser = computed(() => user.value)

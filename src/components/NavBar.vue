@@ -40,6 +40,32 @@
           class="avatar"
         />
         <div v-else class="avatar avatar-placeholder" aria-hidden="true" />
+        <button
+          type="button"
+          class="btn btn-secondary btn-small theme-toggle-icon"
+          :disabled="isLoading"
+          @click="emit('toggle-theme')"
+          :aria-label="theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'"
+          :title="theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'"
+        >
+          <svg v-if="theme === 'dark'" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path
+              d="M12 3.25a.9.9 0 0 1 .9.9v1.2a.9.9 0 1 1-1.8 0v-1.2a.9.9 0 0 1 .9-.9ZM12 18.65a.9.9 0 0 1 .9.9v1.2a.9.9 0 1 1-1.8 0v-1.2a.9.9 0 0 1 .9-.9ZM4.15 11.1h1.2a.9.9 0 1 1 0 1.8h-1.2a.9.9 0 1 1 0-1.8ZM18.65 11.1h1.2a.9.9 0 1 1 0 1.8h-1.2a.9.9 0 1 1 0-1.8ZM6.02 6.02a.9.9 0 0 1 1.27 0l.85.85a.9.9 0 1 1-1.27 1.27l-.85-.85a.9.9 0 0 1 0-1.27ZM16.86 16.86a.9.9 0 0 1 1.27 0l.85.85a.9.9 0 1 1-1.27 1.27l-.85-.85a.9.9 0 0 1 0-1.27ZM17.98 6.02a.9.9 0 0 1 0 1.27l-.85.85a.9.9 0 0 1-1.27-1.27l.85-.85a.9.9 0 0 1 1.27 0ZM7.14 16.86a.9.9 0 0 1 0 1.27l-.85.85a.9.9 0 1 1-1.27-1.27l.85-.85a.9.9 0 0 1 1.27 0Z"
+              fill="currentColor"
+              opacity="0.92"
+            />
+            <path
+              d="M12 7.5a4.5 4.5 0 1 0 0 9a4.5 4.5 0 0 0 0-9Z"
+              fill="currentColor"
+            />
+          </svg>
+          <svg v-else viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path
+              d="M21.5 14.8a8.6 8.6 0 0 1-10.9-10.9a.9.9 0 0 0-1.2-1.06A9.9 9.9 0 1 0 22.56 16a.9.9 0 0 0-1.06-1.2Z"
+              fill="currentColor"
+            />
+          </svg>
+        </button>
         <button class="btn btn-secondary btn-small" @click="openLogoutConfirm" :disabled="isLoading">
           Logout
         </button>
@@ -93,10 +119,14 @@ const props = defineProps({
   sdkPreparing: {
     type: Boolean,
     default: false
+  },
+  theme: {
+    type: String,
+    default: 'system'
   }
 })
 
-const emit = defineEmits(['login', 'logout'])
+const emit = defineEmits(['login', 'logout', 'toggle-theme'])
 
 const handleLoginClick = () => {
   emit('login')
@@ -200,6 +230,25 @@ watch(
   display: flex;
   align-items: center;
   gap: var(--spacing-md);
+}
+
+.theme-toggle-icon {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 999px;
+  line-height: 0;
+}
+
+.theme-toggle-icon svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.theme-toggle-icon:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 70%, white);
+  outline-offset: 2px;
 }
 
 .navbar-user-info {
@@ -324,6 +373,12 @@ watch(
 
   .navbar-user {
     gap: var(--spacing-xs);
+  }
+
+  .theme-toggle-icon {
+    width: 38px;
+    height: 38px;
+    padding: 0;
   }
 
   .btn {

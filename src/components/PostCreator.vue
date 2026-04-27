@@ -67,21 +67,43 @@
           class="textarea"
           :disabled="isSubmitting"
           :maxlength="maxChars"
+          spellcheck="true"
+          autocapitalize="sentences"
           rows="4"
           placeholder="What do you want to share?"
         />
-        <span class="meta">{{ content.length }}/{{ maxChars }}</span>
+        <div class="meta-row">
+          <span class="meta" :class="{ 'meta-warn': isNearLimit, 'meta-error': isOverLimit }">
+            {{ content.length }}/{{ maxChars }}
+          </span>
+        </div>
+        <div v-if="validationWarnings.length" class="field-warnings" role="status" aria-live="polite">
+          <div v-for="w in validationWarnings" :key="w" class="field-warning">
+            {{ w }}
+          </div>
+        </div>
+        <div v-if="writingSuggestions.length" class="field-suggestions" role="status" aria-live="polite">
+          <div class="field-suggestions-title">Writing suggestions</div>
+          <ul class="field-suggestions-list">
+            <li v-for="s in writingSuggestions" :key="s">{{ s }}</li>
+          </ul>
+        </div>
       </label>
 
       <div class="field">
         <div class="field-row">
-          <span class="label">Image</span>
+          <div class="field-row-left">
+            <span class="label">Upload</span>
+            <span v-if="mediaFiles.length" class="upload-count" aria-live="polite">
+              {{ uploadCountLabel }}
+            </span>
+          </div>
           <button
-            v-if="imageFile || imagePreviewUrl"
+            v-if="mediaFiles.length"
             type="button"
             class="btn btn-small"
             :disabled="isSubmitting"
-            @click="clearImage"
+            @click="clearAllMedia"
           >
             Remove
           </button>
@@ -89,13 +111,37 @@
 
         <ImageDropzone
           :disabled="isSubmitting || !isAuthenticated"
-          title="Click to upload an image"
-          subtitle="PNG, JPG, GIF — up to 10MB"
-          @file-selected="onDropzoneFileSelected"
+          title="Click to upload images or a video"
+          subtitle="Up to 10 images OR 1 video"
+          accept="image/*,video/*"
+          :multiple="true"
+          @files-selected="onDropzoneFilesSelected"
         />
 
-        <div v-if="imagePreviewUrl" class="preview">
-          <img :src="imagePreviewUrl" alt="Selected image preview" />
+        <div v-if="mediaPreviews.length" class="media-preview-grid">
+          <div v-for="(m, idx) in mediaPreviews" :key="m.key" class="media-preview">
+            <button
+              type="button"
+              class="media-remove"
+              :disabled="isSubmitting"
+              aria-label="Remove media"
+              title="Remove media"
+              @click="removeMediaAt(idx)"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" class="media-remove__icon">
+                <path
+                  d="M18 6L6 18M6 6l12 12"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+            <img v-if="m.kind === 'image'" :src="m.previewUrl" alt="Selected image preview" />
+            <video v-else-if="m.kind === 'video'" :src="m.previewUrl" controls playsinline />
+            <div class="media-caption">{{ m.name }}</div>
+          </div>
         </div>
       </div>
 
@@ -143,7 +189,9 @@
             <span class="publish-confirm-preview-label">Message</span>
             <p class="publish-confirm-preview-body">{{ contentPreview }}</p>
           </div>
-          <p v-if="imageFile" class="publish-confirm-note">This post includes an image.</p>
+        <p v-if="mediaFiles.length" class="publish-confirm-note">
+          This post includes {{ mediaConfirmSummary }}.
+        </p>
           <div class="publish-confirm-actions">
             <button
               type="button"
@@ -199,8 +247,8 @@ async function reconnectFacebookForPages() {
 
 const maxChars = 500
 const content = ref('')
-const imageFile = ref(null)
-const imagePreviewUrl = ref('')
+const mediaFiles = ref([])
+const mediaPreviews = ref([])
 const isSubmitting = ref(false)
 const fileInput = ref(null)
 const showPublishConfirm = ref(false)
@@ -279,11 +327,11 @@ const canSubmit = computed(() => {
   if (isSubmitting.value) return false
   if (showPublishConfirm.value) return false
   const hasText = content.value.trim().length > 0
-  const hasImage = !!imageFile.value
-  if (usingGuestPublishMode.value) return hasText || hasImage
+  const hasMedia = mediaFiles.value.length > 0
+  if (usingGuestPublishMode.value) return hasText || hasMedia
   if (!props.isAuthenticated) return false
   if (!publishablePages.value.length) return false
-  return hasText || hasImage
+  return hasText || hasMedia
 })
 
 const confirmTargetPageName = computed(() => {
@@ -320,41 +368,96 @@ function readFileAsDataUrl(file) {
   })
 }
 
-const onFileChange = async (e) => {
-  const file = e?.target?.files?.[0]
-  if (!file) return
-  imageFile.value = file
-  try {
-    imagePreviewUrl.value = await readFileAsDataUrl(file)
-  } catch (err) {
-    imageFile.value = null
-    imagePreviewUrl.value = ''
-    toast.error(err?.message || 'Could not load image preview.')
-  }
+function makePreviewKey(file) {
+  return `${file?.name || 'file'}_${file?.size || 0}_${file?.lastModified || 0}`
 }
 
-const onDropzoneFileSelected = async (file) => {
-  if (!file) return
+async function buildPreviewForFile(file) {
+  const type = String(file?.type || '')
+  const isVideo = type.startsWith('video/')
+  if (isVideo) {
+    const url = URL.createObjectURL(file)
+    return { key: makePreviewKey(file), kind: 'video', previewUrl: url, name: file?.name || 'video' }
+  }
+  const url = await readFileAsDataUrl(file)
+  return { key: makePreviewKey(file), kind: 'image', previewUrl: url, name: file?.name || 'image' }
+}
+
+function normalizeSelection(existingFiles, newFiles) {
+  const existing = Array.from(existingFiles || []).filter(Boolean)
+  const incoming = Array.from(newFiles || []).filter(Boolean)
+  const merged = [...existing, ...incoming]
+  if (!merged.length) return { files: [], error: null }
+
+  const images = merged.filter((f) => String(f?.type || '').startsWith('image/'))
+  const videos = merged.filter((f) => String(f?.type || '').startsWith('video/'))
+  const others = merged.filter(
+    (f) => !String(f?.type || '').startsWith('image/') && !String(f?.type || '').startsWith('video/')
+  )
+
+  if (others.length) return { files: [], error: 'Images or videos only.' }
+  if (videos.length > 1) return { files: videos.slice(0, 1), error: 'Only 1 video is allowed.' }
+  if (videos.length === 1 && images.length > 0) return { files: [videos[0]], error: 'Please choose either images OR a video (not both).' }
+  if (videos.length === 1) return { files: [videos[0]], error: null }
+  if (images.length > 10) return { files: images.slice(0, 10), error: 'Up to 10 images only.' }
+  return { files: images, error: null }
+}
+
+const onDropzoneFilesSelected = async (files) => {
+  if (!files?.length) return
   if (fileInput.value) fileInput.value.value = ''
-  imageFile.value = file
+
+  const { files: normalized, error } = normalizeSelection(mediaFiles.value, files)
+  if (error) {
+    toast.error(error)
+    // still apply the capped list so the user sees the first 10 chosen
+    mediaFiles.value = normalized
+  }
+
+  // Revoke old object URLs to prevent memory leaks (videos use object URLs).
+  for (const p of mediaPreviews.value) {
+    if (p?.kind === 'video' && p?.previewUrl && String(p.previewUrl).startsWith('blob:')) {
+      try { URL.revokeObjectURL(p.previewUrl) } catch {}
+    }
+  }
+
+  mediaFiles.value = normalized
+  mediaPreviews.value = []
   try {
-    imagePreviewUrl.value = await readFileAsDataUrl(file)
+    const settled = await Promise.allSettled(normalized.map((f) => buildPreviewForFile(f)))
+    const ok = settled.filter((x) => x.status === 'fulfilled').map((x) => x.value)
+    const failed = settled.filter((x) => x.status === 'rejected').length
+    mediaPreviews.value = ok
+    if (failed) {
+      toast.error(`Some files could not be previewed (${failed}). Try MP4/JPG/PNG.`)
+    }
   } catch (err) {
-    imageFile.value = null
-    imagePreviewUrl.value = ''
-    toast.error(err?.message || 'Could not load image preview.')
+    toast.error(err?.message || 'Could not load preview.')
+    clearAllMedia()
   }
 }
 
-const clearImage = () => {
-  imageFile.value = null
-  imagePreviewUrl.value = ''
+function removeMediaAt(idx) {
+  const i = Number(idx)
+  if (!Number.isFinite(i)) return
+  mediaFiles.value.splice(i, 1)
+  mediaPreviews.value.splice(i, 1)
+}
+
+const clearAllMedia = () => {
+  for (const p of mediaPreviews.value) {
+    if (p?.kind === 'video' && p?.previewUrl && String(p.previewUrl).startsWith('blob:')) {
+      try { URL.revokeObjectURL(p.previewUrl) } catch {}
+    }
+  }
+  mediaFiles.value = []
+  mediaPreviews.value = []
   if (fileInput.value) fileInput.value.value = ''
 }
 
 const reset = () => {
   content.value = ''
-  clearImage()
+  clearAllMedia()
 }
 
 function cancelPublishConfirm() {
@@ -376,8 +479,8 @@ const handleSubmit = () => {
   }
 
   const message = content.value.trim()
-  if (!message && !imageFile.value) {
-    toast.error('Write something or add an image first.')
+  if (!message && mediaFiles.value.length === 0) {
+    toast.error('Write something or add media first.')
     return
   }
 
@@ -386,8 +489,8 @@ const handleSubmit = () => {
 
 async function confirmPublish() {
   const message = content.value.trim()
-  if (!message && !imageFile.value) {
-    toast.error('Write something or add an image first.')
+  if (!message && mediaFiles.value.length === 0) {
+    toast.error('Write something or add media first.')
     showPublishConfirm.value = false
     return
   }
@@ -425,15 +528,16 @@ async function confirmPublish() {
 
   isSubmitting.value = true
   try {
-    const base = String(import.meta.env.BASE_URL || '/')
-    const cleanBase = base.endsWith('/') ? base : `${base}/`
     let publishRes
-    if (imageFile.value) {
+    if (mediaFiles.value.length) {
       const fd = new FormData()
       if (!guestMode) fd.append('pageId', String(pageId))
       fd.append('message', message)
-      fd.append('image', imageFile.value, imageFile.value.name || 'photo.jpg')
-      const url = guestMode ? `${cleanBase}api/server/page/photo-post` : `${cleanBase}api/page/photo-post`
+      for (const f of mediaFiles.value) {
+        fd.append('media', f, f.name || 'media')
+      }
+      // API routes should not use Vite BASE_URL; it breaks proxying when the app is served from a subpath.
+      const url = guestMode ? '/api/server/page/media-post' : '/api/page/media-post'
       const res = await fetch(url, {
         method: 'POST',
         credentials: guestMode ? 'omit' : 'include',
@@ -442,10 +546,10 @@ async function confirmPublish() {
       const data = await res.json().catch(() => ({}))
       publishRes =
         res.ok && data.success
-          ? { success: true, postId: data.postId, facebookUrl: data.facebookUrl }
+          ? { success: true, postId: data.postId, facebookUrl: data.facebookUrl, media: Array.isArray(data.media) ? data.media : null }
           : { success: false, error: data.error || `Publish failed (${res.status}).` }
     } else {
-      const url = guestMode ? `${cleanBase}api/server/page/post` : `${cleanBase}api/lgu/posts`
+      const url = guestMode ? '/api/server/page/post' : '/api/lgu/posts'
       const res = await fetch(url, {
         method: 'POST',
         credentials: guestMode ? 'omit' : 'include',
@@ -459,10 +563,26 @@ async function confirmPublish() {
           : { success: false, error: data.error || `Publish failed (${res.status}).` }
     }
 
+    // Prefer durable URLs returned by the API (e.g. /api/uploads/...), fallback to kind-only.
+    const apiMedia = Array.isArray(publishRes?.media) ? publishRes.media : []
+    const mediaForStore = apiMedia.length
+      ? apiMedia.map((m) => ({
+          kind: m?.kind === 'video' ? 'video' : 'image',
+          url: typeof m?.url === 'string' ? m.url : '',
+          name: typeof m?.name === 'string' ? m.name : ''
+        }))
+      : mediaPreviews.value
+          .filter((m) => m?.kind === 'image' && m?.previewUrl)
+          .slice(0, 10)
+          // Data URLs are safe to persist and will still render after refresh.
+          .map((m) => ({ kind: 'image', url: m.previewUrl, name: m.name || '' }))
+
     emit('post-created', {
       id: publishRes.postId || undefined,
       content: message,
-      image: imagePreviewUrl.value || null,
+      // Back-compat: keep "image" for older UI paths (first image).
+      image: mediaForStore.find((m) => m.kind === 'image' && m.url)?.url || null,
+      media: mediaForStore.length ? mediaForStore : null,
       createdAt: new Date().toISOString(),
       likes: 0,
       shares: 0,
@@ -496,6 +616,58 @@ async function confirmPublish() {
     isSubmitting.value = false
   }
 }
+
+const isNearLimit = computed(() => content.value.length >= maxChars - 40 && content.value.length <= maxChars)
+const isOverLimit = computed(() => content.value.length > maxChars)
+
+const validationWarnings = computed(() => {
+  const warnings = []
+  if (!content.value.trim() && mediaFiles.value.length === 0) warnings.push('Required: add a message or upload media.')
+  if (mediaFiles.value.length) {
+    const imagesCount = mediaFiles.value.filter((f) => String(f?.type || '').startsWith('image/')).length
+    const videosCount = mediaFiles.value.filter((f) => String(f?.type || '').startsWith('video/')).length
+    if (imagesCount > 10) warnings.push('Up to 10 images only.')
+    if (imagesCount === 10) warnings.push('Limit reached: 10 images only.')
+    if (videosCount > 1) warnings.push('Only 1 video is allowed.')
+    if (videosCount === 1 && imagesCount > 0) warnings.push('Choose either images OR a video (not both).')
+  }
+  if (isNearLimit.value) warnings.push('You are near the 500 character limit.')
+  return warnings
+})
+
+const writingSuggestions = computed(() => {
+  const t = String(content.value || '')
+  const s = []
+  if (!t.trim()) return s
+  if (t.length > 280) s.push('Consider shortening the message for readability (optional).')
+  if (/[A-Z]{8,}/.test(t) || (t.replace(/[^A-Za-z]/g, '').length > 10 && t === t.toUpperCase())) {
+    s.push('Avoid ALL CAPS; it can feel like shouting.')
+  }
+  if (/!{3,}|\?{3,}/.test(t)) s.push('Too many punctuation marks can look unprofessional (e.g., "!!!").')
+  if (!/[.!?]\s*$/.test(t.trim())) s.push('Add a period/question mark at the end for a cleaner tone.')
+  if (/\b(ur|u)\b/i.test(t)) s.push('Use complete words (e.g., "your", "you") for official posts.')
+  return s
+})
+
+const mediaConfirmSummary = computed(() => {
+  const files = mediaFiles.value
+  const i = files.filter((f) => String(f?.type || '').startsWith('image/')).length
+  const v = files.filter((f) => String(f?.type || '').startsWith('video/')).length
+  if (v === 1) return '1 video'
+  if (i === 1) return '1 image'
+  if (i > 1) return `${i} images`
+  return 'media'
+})
+
+const uploadCountLabel = computed(() => {
+  const files = mediaFiles.value
+  const i = files.filter((f) => String(f?.type || '').startsWith('image/')).length
+  const v = files.filter((f) => String(f?.type || '').startsWith('video/')).length
+  if (v === 1) return '1 video selected'
+  if (i === 1) return '1/10 image selected'
+  if (i > 1) return `${i}/10 images selected`
+  return `${files.length} selected`
+})
 </script>
 
 <style scoped>
@@ -633,6 +805,19 @@ async function confirmPublish() {
   gap: var(--spacing-md);
 }
 
+.field-row-left {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.upload-count {
+  font-size: 0.86rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
 .label {
   font-weight: 600;
   color: var(--text-primary);
@@ -661,6 +846,58 @@ async function confirmPublish() {
   color: var(--text-secondary);
 }
 
+.meta-row {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.meta-warn {
+  color: color-mix(in srgb, var(--accent) 75%, var(--text-secondary));
+  font-weight: 600;
+}
+
+.meta-error {
+  color: var(--error);
+  font-weight: 700;
+}
+
+.field-warnings {
+  margin-top: 6px;
+  display: grid;
+  gap: 6px;
+}
+
+.field-warning {
+  font-size: 0.85rem;
+  color: var(--error);
+  line-height: 1.35;
+}
+
+.field-suggestions {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+}
+
+.field-suggestions-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 6px;
+}
+
+.field-suggestions-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  color: var(--text-secondary);
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
 .file {
   width: 100%;
 }
@@ -679,6 +916,99 @@ async function confirmPublish() {
   max-height: 360px;
   object-fit: cover;
   display: block;
+}
+
+.media-preview-grid {
+  margin-top: var(--spacing-sm);
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.media-preview {
+  position: relative;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background-color: var(--bg-tertiary);
+}
+
+.media-preview img,
+.media-preview video {
+  width: 100%;
+  height: 160px;
+  object-fit: cover;
+  display: block;
+}
+
+.media-remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 80%, transparent);
+  color: var(--text-primary);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  padding: 0;
+  line-height: 0;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+  transition:
+    transform 120ms ease,
+    background-color 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    opacity 120ms ease;
+}
+
+.media-remove__icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.media-remove:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--border) 70%, var(--text-primary));
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.22);
+}
+
+.media-remove:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+}
+
+.media-remove:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 70%, white);
+  outline-offset: 2px;
+}
+
+.media-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.media-caption {
+  padding: 8px 10px;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  border-top: 1px solid var(--border);
+  background: var(--bg-primary);
+}
+
+@media (max-width: 520px) {
+  .media-preview-grid {
+    grid-template-columns: 1fr;
+  }
+  .media-preview img,
+  .media-preview video {
+    height: 200px;
+  }
 }
 
 .actions {

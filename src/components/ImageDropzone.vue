@@ -5,7 +5,8 @@
       ref="inputRef"
       class="image-dropzone__input"
       type="file"
-      accept="image/*"
+      :accept="accept"
+      :multiple="multiple"
       :disabled="disabled"
       @change="onInputChange"
     />
@@ -58,10 +59,12 @@ import { computed, ref } from 'vue'
 const props = defineProps({
   disabled: { type: Boolean, default: false },
   title: { type: String, default: 'Click to upload an image' },
-  subtitle: { type: String, default: 'PNG, JPG, GIF — up to 10MB' }
+  subtitle: { type: String, default: 'PNG, JPG, GIF — up to 10MB' },
+  accept: { type: String, default: 'image/*' },
+  multiple: { type: Boolean, default: false }
 })
 
-const emit = defineEmits(['file-selected'])
+const emit = defineEmits(['file-selected', 'files-selected'])
 
 const inputRef = ref(null)
 const isDragging = ref(false)
@@ -72,9 +75,20 @@ function emitFile(file) {
   emit('file-selected', file)
 }
 
+function emitFiles(files) {
+  const list = Array.from(files || []).filter(Boolean)
+  if (!list.length) return
+  emit('files-selected', list)
+  // Back-compat: also emit the first file for older callers.
+  emit('file-selected', list[0])
+}
+
 function onInputChange(e) {
-  const file = e?.target?.files?.[0]
-  emitFile(file)
+  const files = e?.target?.files
+  if (props.multiple) emitFiles(files)
+  else emitFile(files?.[0])
+  // Reset the input so choosing the same file again triggers change.
+  if (inputRef.value) inputRef.value.value = ''
 }
 
 function onDragEnter() {
@@ -91,8 +105,9 @@ function onDragLeave() {
 function onDrop(e) {
   if (props.disabled) return
   isDragging.value = false
-  const file = e?.dataTransfer?.files?.[0]
-  emitFile(file)
+  const files = e?.dataTransfer?.files
+  if (props.multiple) emitFiles(files)
+  else emitFile(files?.[0])
   // Reset the input so choosing the same file again triggers change.
   if (inputRef.value) inputRef.value.value = ''
 }

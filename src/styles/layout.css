@@ -9,7 +9,8 @@
 .main-content {
   flex: 1;
   padding: var(--spacing-xl);
-  max-width: 1200px;
+  /* Wider desktop layout to reduce side whitespace */
+  max-width: 1800px;
   width: 100%;
   margin: 0 auto;
 }
@@ -67,7 +68,8 @@
 }
 
 .navbar-wrapper {
-  max-width: 1200px;
+  /* Keep navbar aligned with main content width */
+  max-width: 1600px;
   margin: 0 auto;
   display: flex;
   align-items: center;
@@ -310,6 +312,18 @@
 
   .container {
     padding: 0 var(--spacing-md);
+  }
+}
+
+/* Ultra-wide screens: use space more efficiently */
+@media (min-width: 1400px) {
+  .main-content {
+    padding-left: clamp(24px, 3vw, 56px);
+    padding-right: clamp(24px, 3vw, 56px);
+  }
+
+  .content-wrapper {
+    grid-template-columns: minmax(420px, 540px) 1fr;
   }
 }
 

@@ -33,38 +33,79 @@
           tabindex="-1"
           ref="editDialogRef"
         >
-          <h3 id="edit-title" class="edit-title">Edit post</h3>
-          <p class="edit-subtitle">
-            This updates the post in this app’s saved list. (Facebook Page posts may not update retroactively.)
-          </p>
-          <label class="edit-field">
-            <span class="edit-label">Message</span>
-            <textarea v-model="editContent" class="edit-textarea" rows="5" maxlength="500" />
-            <span class="edit-hint">{{ (editContent || '').length }}/500</span>
-          </label>
-          <div class="edit-field">
-            <div class="edit-image-row">
-              <span class="edit-label">Image</span>
-              <button
-                v-if="editImagePreviewUrl"
-                type="button"
-                class="btn btn-secondary btn-small"
-                :disabled="editSaving"
-                @click="clearEditImage"
-              >
-                Remove
-              </button>
+          <div class="edit-header">
+            <div>
+              <h3 id="edit-title" class="edit-title">Edit post</h3>
+              <p class="edit-subtitle">
+                This updates the post in this app’s saved list. (Facebook Page posts may not update retroactively.)
+              </p>
             </div>
-            <ImageDropzone
-              :disabled="editSaving"
-              title="Click to upload an image"
-              subtitle="PNG, JPG, GIF — up to 10MB"
-              @file-selected="onEditDropzoneFileSelected"
-            />
-            <div v-if="editImagePreviewUrl" class="edit-preview">
-              <img :src="editImagePreviewUrl" alt="Selected image preview" />
+            <button type="button" class="edit-close" :disabled="editSaving" aria-label="Close" @click="closeEdit">
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path
+                  d="M18 6L6 18M6 6l12 12"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2.5"
+                  stroke-linecap="round"
+                />
+              </svg>
+            </button>
+          </div>
+
+          <div class="edit-body">
+            <label class="edit-field">
+              <span class="edit-label">Message</span>
+              <textarea v-model="editContent" class="edit-textarea" rows="4" maxlength="500" />
+              <span class="edit-hint">{{ (editContent || '').length }}/500</span>
+            </label>
+            <div class="edit-field">
+              <div class="edit-image-row">
+                <span class="edit-label">Media</span>
+                <button
+                  v-if="editMediaPreviews.length"
+                  type="button"
+                  class="btn btn-secondary btn-small"
+                  :disabled="editSaving"
+                  @click="clearEditMedia"
+                >
+                  Remove
+                </button>
+              </div>
+              <ImageDropzone
+                :disabled="editSaving"
+                title="Click to upload images"
+                subtitle="Up to 10 images only"
+                accept="image/*"
+                :multiple="true"
+                @files-selected="onEditDropzoneFilesSelected"
+              />
+              <div v-if="editMediaPreviews.length" class="edit-media-grid">
+                <div v-for="(p, idx) in editMediaPreviews" :key="p.key" class="edit-media-item">
+                  <button
+                    type="button"
+                    class="edit-media-remove"
+                    :disabled="editSaving"
+                    aria-label="Remove image"
+                    title="Remove image"
+                    @click="removeEditMediaAt(idx)"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path
+                        d="M18 6L6 18M6 6l12 12"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2.5"
+                        stroke-linecap="round"
+                      />
+                    </svg>
+                  </button>
+                  <img :src="p.url" :alt="`Selected image ${idx + 1}`" />
+                </div>
+              </div>
             </div>
           </div>
+
           <div class="edit-actions">
             <button type="button" class="btn btn-secondary" :disabled="editSaving" @click="closeEdit">
               Cancel
@@ -82,7 +123,9 @@
         <!-- <img :src="userAvatar" :alt="userName" class="avatar" /> -->
         <!-- <h4 class="user-name">{{ userName }}</h4> -->
         <div class="user-details">
-          <span class="post-time">{{ formatTime(post.createdAt) }}</span>
+          <span class="post-time" :title="formatRelativeTime(post.createdAt)">
+            {{ formatDateTime(post.createdAt) }}
+          </span>
         </div>
       </div>
       <div v-if="canDelete" class="post-menu-wrap" ref="menuWrapRef">
@@ -108,12 +151,110 @@
     </div>
 
     <div class="post-content">
-      <p>{{ post.content }}</p>
+      <p :class="postTextSizeClass">{{ post.content }}</p>
     </div>
 
-    <div v-if="post.image" class="post-image">
-      <img :src="post.image" :alt="post.content" />
+    <div v-if="normalizedMedia.length" class="post-media-wrap">
+      <!-- Videos: show as featured/full-width -->
+      <div v-if="videoMedia.length" class="post-media post-media--videos">
+        <div
+          v-for="(m, idx) in videoMedia"
+          :key="`video_${idx}`"
+          class="post-media-item post-media-item--video"
+        >
+          <video v-if="m.url" :src="m.url" controls playsinline class="post-media-video" />
+        </div>
+      </div>
+
+      <!-- Images: Facebook-style collage (show up to 4 + overlay count) -->
+      <div v-if="imageMedia.length" class="post-media post-media--images">
+        <button
+          v-for="(m, idx) in visibleImageMedia"
+          :key="`img_${m.url}_${idx}`"
+          type="button"
+          class="post-media-open post-media-item"
+          :aria-label="`View image ${idx + 1}`"
+          @click="openImageViewer(idx)"
+        >
+          <img :src="m.url" :alt="post.content" />
+          <div
+            v-if="idx === 3 && extraImageCount > 0"
+            class="post-media-more"
+            aria-hidden="true"
+          >
+            +{{ extraImageCount }}
+          </div>
+        </button>
+      </div>
+
+      <!-- Fallback: show Facebook embed when no local media URLs exist -->
+      <div v-if="!imageMedia.length && !videoMedia.length && (facebookEmbedUrl || facebookPagePostUrl)" class="post-media post-media--embed">
+        <iframe
+          v-if="facebookEmbedUrl"
+          class="post-media-embed"
+          :src="facebookEmbedUrl"
+          style="border: none; overflow: hidden"
+          scrolling="no"
+          frameborder="0"
+          allowfullscreen="true"
+          allow="autoplay; clipboard-write; encrypted-media; picture-in-picture; web-share"
+        />
+        <a v-else-if="facebookPagePostUrl" :href="facebookPagePostUrl" target="_blank" rel="noopener noreferrer">
+          View media on Facebook
+        </a>
+      </div>
     </div>
+
+    <Teleport to="body">
+      <div
+        v-if="imageViewerOpen"
+        class="image-viewer-backdrop"
+        role="presentation"
+        @click.self="closeImageViewer"
+      >
+        <div class="image-viewer" role="dialog" aria-modal="true" aria-label="Image viewer" tabindex="-1">
+          <button type="button" class="image-viewer-close" aria-label="Close" @click="closeImageViewer">
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path
+                d="M18 6L6 18M6 6l12 12"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+              />
+            </svg>
+          </button>
+
+          <button
+            v-if="viewerImages.length > 1"
+            type="button"
+            class="image-viewer-nav image-viewer-prev"
+            aria-label="Previous image"
+            @click="prevImage"
+          >
+            ‹
+          </button>
+
+          <div class="image-viewer-stage">
+            <img class="image-viewer-img" :src="activeViewerUrl" alt="Selected image" />
+          </div>
+
+          <button
+            v-if="viewerImages.length > 1"
+            type="button"
+            class="image-viewer-nav image-viewer-next"
+            aria-label="Next image"
+            @click="nextImage"
+          >
+            ›
+          </button>
+
+          <div v-if="viewerImages.length > 1" class="image-viewer-count">
+            {{ viewerIndex + 1 }} / {{ viewerImages.length }}
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <div class="post-stats">
       <span v-if="(post.likes ?? 0) > 0" class="stat">
@@ -201,15 +342,27 @@ const editOpen = ref(false)
 const editContent = ref('')
 const editSaving = ref(false)
 const editDialogRef = ref(null)
-const editImageFile = ref(null)
-const editImagePreviewUrl = ref('')
+const editMediaFiles = ref([])
+const editMediaPreviews = ref([]) // { key, url, name }
 const operationOverlayOpen = ref(false)
 const operationOverlayTitle = ref('')
 const operationOverlaySubtitle = ref('')
 
+const imageViewerOpen = ref(false)
+const viewerIndex = ref(0)
+
 const canDelete = computed(() => props.showDeleteOption)
 const canSaveEdit = computed(() => String(editContent.value || '').trim().length > 0)
 const showOperationOverlay = computed(() => operationOverlayOpen.value)
+
+const postTextSizeClass = computed(() => {
+  const t = String(props.post?.content || '').trim()
+  const n = t.length
+  // Match Facebook feel: short posts look big, long posts slightly smaller.
+  if (n <= 90) return 'post-text--large'
+  if (n <= 260) return 'post-text--normal'
+  return 'post-text--small'
+})
 
 async function runWithOverlay(
   { title, subtitle, minMs = 2000 },
@@ -237,9 +390,91 @@ const facebookPagePostUrl = computed(() => {
   return typeof u === 'string' && u.trim() ? u.trim() : ''
 })
 
+const facebookEmbedUrl = computed(() => {
+  const href = facebookPagePostUrl.value
+  if (!href) return ''
+  // Use Post plugin for broad compatibility (works for photo/video/text posts).
+  return `https://www.facebook.com/plugins/post.php?href=${encodeURIComponent(href)}&show_text=true&width=500`
+})
 
-const formatTime = (timestamp) => {
+
+const normalizedMedia = computed(() => {
+  const m = props.post?.media
+  const arr = Array.isArray(m) ? m : []
+  const fromMedia = arr
+    // Allow items without URL (we'll render via Facebook embed using `facebookUrl`).
+    .filter((x) => x && typeof x === 'object')
+    .map((x) => ({
+      kind: x.kind === 'video' ? 'video' : 'image',
+      url: typeof x.url === 'string' ? String(x.url).trim() : '',
+      name: typeof x.name === 'string' ? x.name : ''
+    }))
+  if (fromMedia.length) return fromMedia
+  const img = typeof props.post?.image === 'string' ? props.post.image.trim() : ''
+  return img ? [{ kind: 'image', url: img, name: '' }] : []
+})
+
+const imageMedia = computed(() =>
+  normalizedMedia.value.filter((m) => m?.kind === 'image' && m?.url)
+)
+const videoMedia = computed(() =>
+  normalizedMedia.value.filter((m) => m?.kind === 'video' && m?.url)
+)
+const visibleImageMedia = computed(() => imageMedia.value.slice(0, 4))
+const extraImageCount = computed(() => Math.max(0, imageMedia.value.length - visibleImageMedia.value.length))
+
+const viewerImages = computed(() => normalizedMedia.value.filter((m) => m?.kind === 'image' && m?.url))
+const activeViewerUrl = computed(() => viewerImages.value?.[viewerIndex.value]?.url || '')
+
+async function openImageViewer(idx) {
+  const imgs = viewerImages.value
+  if (!imgs.length) return
+  const start = Math.max(0, Math.min(imgs.length - 1, Number(idx) || 0))
+  viewerIndex.value = start
+  imageViewerOpen.value = true
+  await nextTick()
+  const el = document.querySelector('.image-viewer')
+  el?.focus?.()
+}
+
+function closeImageViewer() {
+  imageViewerOpen.value = false
+}
+
+function prevImage() {
+  const n = viewerImages.value.length
+  if (n <= 1) return
+  viewerIndex.value = (viewerIndex.value - 1 + n) % n
+}
+
+function nextImage() {
+  const n = viewerImages.value.length
+  if (n <= 1) return
+  viewerIndex.value = (viewerIndex.value + 1) % n
+}
+
+function onKeyDown(e) {
+  if (!imageViewerOpen.value) return
+  if (e.key === 'Escape') closeImageViewer()
+  else if (e.key === 'ArrowLeft') prevImage()
+  else if (e.key === 'ArrowRight') nextImage()
+}
+
+const formatDateTime = (timestamp) => {
   const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return String(timestamp || '')
+  return date.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+}
+
+const formatRelativeTime = (timestamp) => {
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return ''
   const now = new Date()
   const diffMs = now - date
   const diffMins = Math.floor(diffMs / 60000)
@@ -251,11 +486,7 @@ const formatTime = (timestamp) => {
   if (diffHours < 24) return `${diffHours}h ago`
   if (diffDays < 7) return `${diffDays}d ago`
 
-  return date.toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric'
-  })
+  return ''
 }
 
 const toggleMenu = () => {
@@ -276,10 +507,12 @@ function onDocumentPointerDown(e) {
 
 onMounted(() => {
   document.addEventListener('pointerdown', onDocumentPointerDown)
+  document.addEventListener('keydown', onKeyDown)
 })
 
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onDocumentPointerDown)
+  document.removeEventListener('keydown', onKeyDown)
 })
 
 const handleDelete = async () => {
@@ -294,8 +527,8 @@ const handleDelete = async () => {
 const handleEdit = async () => {
   menuOpen.value = false
   editContent.value = String(props.post?.content || '')
-  editImageFile.value = null
-  editImagePreviewUrl.value = typeof props.post?.image === 'string' ? props.post.image : ''
+  editMediaFiles.value = []
+  editMediaPreviews.value = []
   editOpen.value = true
   await nextTick()
   editDialogRef.value?.focus?.()
@@ -304,6 +537,10 @@ const handleEdit = async () => {
 const closeEdit = () => {
   if (editSaving.value) return
   editOpen.value = false
+  if (editPreviewObjectUrl.value) {
+    try { URL.revokeObjectURL(editPreviewObjectUrl.value) } catch {}
+    editPreviewObjectUrl.value = ''
+  }
 }
 
 function readFileAsDataUrl(file) {
@@ -315,21 +552,56 @@ function readFileAsDataUrl(file) {
   })
 }
 
-const onEditDropzoneFileSelected = async (file) => {
-  if (!file) return
-  editImageFile.value = file
+function makeEditPreviewKey(file) {
+  return `${file?.name || 'image'}_${file?.size || 0}_${file?.lastModified || Date.now()}`
+}
+
+function normalizeEditSelection(existingFiles, newFiles) {
+  const existing = Array.from(existingFiles || []).filter(Boolean)
+  const incoming = Array.from(newFiles || []).filter(Boolean)
+  const merged = [...existing, ...incoming]
+  if (!merged.length) return { files: [], error: null }
+  const images = merged.filter((f) => String(f?.type || '').startsWith('image/'))
+  const nonImages = merged.filter((f) => !String(f?.type || '').startsWith('image/'))
+  if (nonImages.length) return { files: [], error: 'Images only. Up to 10 images only.' }
+  if (images.length > 10) return { files: images.slice(0, 10), error: 'Up to 10 images only.' }
+  return { files: images, error: null }
+}
+
+async function buildEditPreviewForFile(file) {
+  const url = await readFileAsDataUrl(file)
+  return { key: makeEditPreviewKey(file), url, name: file?.name || 'image' }
+}
+
+const onEditDropzoneFilesSelected = async (files) => {
+  const { files: normalized, error } = normalizeEditSelection(editMediaFiles.value, files)
+  if (error) {
+    toast.error(error)
+    editMediaFiles.value = normalized
+  }
+  editMediaFiles.value = normalized
+  editMediaPreviews.value = []
   try {
-    editImagePreviewUrl.value = await readFileAsDataUrl(file)
+    for (const f of normalized) {
+      editMediaPreviews.value.push(await buildEditPreviewForFile(f))
+    }
   } catch (err) {
-    editImageFile.value = null
-    editImagePreviewUrl.value = ''
+    editMediaFiles.value = []
+    editMediaPreviews.value = []
     toast.error(err?.message || 'Could not load image preview.')
   }
 }
 
-const clearEditImage = () => {
-  editImageFile.value = null
-  editImagePreviewUrl.value = ''
+const clearEditMedia = () => {
+  editMediaFiles.value = []
+  editMediaPreviews.value = []
+}
+
+function removeEditMediaAt(idx) {
+  const i = Number(idx)
+  if (!Number.isFinite(i)) return
+  editMediaFiles.value.splice(i, 1)
+  editMediaPreviews.value.splice(i, 1)
 }
 
 const saveEdit = async () => {
@@ -341,20 +613,40 @@ const saveEdit = async () => {
     { title: 'Updating post', subtitle: 'Saving your changes…' },
     async () => {
       const id = String(props.post?.id || '')
-      const looksLikeGraphPost = typeof id === 'string' && /^\d+_\d+$/.test(id)
+      const isFacebookObjectId =
+        typeof id === 'string' &&
+        ( // feed post id: "<pageId>_<postId>"
+          /^\d+_\d+$/.test(id) ||
+          // video id can be numeric-only
+          /^\d+$/.test(id)
+        )
       const pageIdMatch = /^(\d+)_\d+$/.exec(id)
-      const pageId = pageIdMatch ? pageIdMatch[1] : ''
-      const hadLocalImage = typeof props.post?.image === 'string' && String(props.post.image).trim().length > 0
-      const imageNowRemoved = hadLocalImage && !editImageFile.value && !String(editImagePreviewUrl.value || '').trim()
+      const pageIdFromId = pageIdMatch ? pageIdMatch[1] : ''
+
+      async function resolvePageIdForWrite() {
+        if (pageIdFromId) return pageIdFromId
+        try {
+          const r = await fetch('/api/me', { credentials: 'include' })
+          const j = await r.json().catch(() => ({}))
+          const lgu = j?.lguPage?.id != null ? String(j.lguPage.id) : ''
+          const selected = j?.selectedPageId != null ? String(j.selectedPageId) : ''
+          return lgu || selected || ''
+        } catch {
+          return ''
+        }
+      }
+
+      const hadExistingMedia = normalizedMedia.value.some((m) => m?.kind === 'image' || m?.kind === 'video')
+      const mediaNowRemoved = hadExistingMedia && editMediaFiles.value.length === 0 && editMediaPreviews.value.length === 0
 
       // If this is a real Facebook Page post and user is signed in, update it on Facebook too.
-      if (looksLikeGraphPost && props.isAuthenticated) {
-        // Removing an image from an existing Facebook post is not supported.
-        // Workaround: create a new TEXT post without image, then delete the old post.
-        if (imageNowRemoved && pageId) {
-          const base = String(import.meta.env.BASE_URL || '/')
-          const cleanBase = base.endsWith('/') ? base : `${base}/`
-          const url = `${cleanBase}api/lgu/posts`
+      if (isFacebookObjectId && props.isAuthenticated) {
+        const pageId = await resolvePageIdForWrite()
+
+        // Removing media from an existing Facebook post is not supported.
+        // Workaround: create a new TEXT post, then delete the old post.
+        if (mediaNowRemoved && pageId) {
+          const url = '/api/lgu/posts'
 
           const r = await fetch(url, {
             method: 'POST',
@@ -364,14 +656,14 @@ const saveEdit = async () => {
           })
           const j = await r.json().catch(() => ({}))
           if (!r.ok || !j?.success) {
-            toast.error(j?.error || `Failed to remove image on Facebook (${r.status}).`)
+            toast.error(j?.error || `Failed to remove media on Facebook (${r.status}).`)
             return
           }
 
           try {
             const del = await facebookService.deletePost(id)
             if (!del?.success) {
-              toast.error(del?.error || 'Removed image by creating a new Page post, but failed to delete the old one.')
+              toast.error(del?.error || 'Removed media by creating a new Page post, but failed to delete the old one.')
             }
           } catch {
             // ignore delete errors
@@ -381,7 +673,8 @@ const saveEdit = async () => {
           const newFacebookUrl = j?.facebookUrl ? String(j.facebookUrl) : ''
           const updates = {
             content: nextContent,
-            image: null
+            image: null,
+            media: null
           }
           if (newPostId) updates.id = newPostId
           if (newFacebookUrl) updates.facebookUrl = newFacebookUrl
@@ -392,35 +685,34 @@ const saveEdit = async () => {
             return
           }
 
-          toast.success('Image removed on LGU Page (new text post).')
+          toast.success('Media removed on LGU Page (new text post).')
           editOpen.value = false
           return
         }
 
-        // Facebook does not support replacing an image in-place on an existing post.
-        // If the user picked a new image, create a NEW photo post on the LGU Page,
-        // then (best-effort) delete the old post.
-        if (editImageFile.value && pageId) {
-          const base = String(import.meta.env.BASE_URL || '/')
-          const cleanBase = base.endsWith('/') ? base : `${base}/`
-          const url = `${cleanBase}api/page/photo-post`
+        // Facebook does not support replacing media in-place.
+        // If user picked new media (image/video), create a NEW media post then delete the old one.
+        if (editMediaFiles.value.length && pageId) {
+          const url = '/api/page/media-post'
 
           const fd = new FormData()
           fd.append('pageId', String(pageId))
           fd.append('message', nextContent)
-          fd.append('image', editImageFile.value, editImageFile.value.name || 'photo.jpg')
+          for (const f of editMediaFiles.value) {
+            fd.append('media', f, f.name || 'image')
+          }
 
           const r = await fetch(url, { method: 'POST', credentials: 'include', body: fd })
           const j = await r.json().catch(() => ({}))
           if (!r.ok || !j?.success) {
-            toast.error(j?.error || `Failed to update image on Facebook (${r.status}).`)
+            toast.error(j?.error || `Failed to update images on Facebook (${r.status}).`)
             return
           }
 
           try {
             const del = await facebookService.deletePost(id)
             if (!del?.success) {
-              toast.error(del?.error || 'Updated image by creating a new Page post, but failed to delete the old one.')
+              toast.error(del?.error || 'Updated media by creating a new Page post, but failed to delete the old one.')
             }
           } catch {
             // ignore delete errors
@@ -428,9 +720,12 @@ const saveEdit = async () => {
 
           const newPostId = j?.postId ? String(j.postId) : ''
           const newFacebookUrl = j?.facebookUrl ? String(j.facebookUrl) : ''
+          // Locally store previews so the app can display immediately.
+          const localMedia = editMediaPreviews.value.map((p) => ({ kind: 'image', url: p.url, name: p.name }))
           const updates = {
             content: nextContent,
-            image: editImagePreviewUrl.value || null
+            image: null,
+            media: localMedia.length ? localMedia : null
           }
           if (newPostId) updates.id = newPostId
           if (newFacebookUrl) updates.facebookUrl = newFacebookUrl
@@ -441,29 +736,68 @@ const saveEdit = async () => {
             return
           }
 
-          toast.success('Post updated on LGU Page (new photo post).')
+          toast.success('Post updated on LGU Page (new images post).')
           editOpen.value = false
           return
         }
 
         // Text-only edits can be done in-place.
-        const base = String(import.meta.env.BASE_URL || '/')
-        const cleanBase = base.endsWith('/') ? base : `${base}/`
-        const url = `${cleanBase}api/lgu/posts/${encodeURIComponent(id)}`
-        const r = await fetch(url, {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: nextContent })
-        })
-        const j = await r.json().catch(() => ({}))
-        if (!r.ok || !j?.success) {
-          toast.error(j?.error || `Failed to edit on Facebook (${r.status}).`)
-          return
+        // (Only for feed-style ids; video objects don't always support message edits this way.)
+        if (/^\d+_\d+$/.test(id)) {
+          const url = `/api/lgu/posts/${encodeURIComponent(id)}`
+          const r = await fetch(url, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: nextContent })
+          })
+          const j = await r.json().catch(() => ({}))
+          if (!r.ok || !j?.success) {
+            toast.error(j?.error || `Failed to edit on Facebook (${r.status}).`)
+            return
+          }
+        } else {
+          // For numeric-only IDs (often videos), safest path is to create a new text post.
+          const pageId = await resolvePageIdForWrite()
+          if (pageId) {
+            const r = await fetch('/api/lgu/posts', {
+              method: 'POST',
+              credentials: 'include',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ pageId: String(pageId), message: nextContent })
+            })
+            const j = await r.json().catch(() => ({}))
+            if (!r.ok || !j?.success) {
+              toast.error(j?.error || `Failed to update on Facebook (${r.status}).`)
+              return
+            }
+            try {
+              await facebookService.deletePost(id)
+            } catch {}
+            const newPostId = j?.postId ? String(j.postId) : ''
+            const newFacebookUrl = j?.facebookUrl ? String(j.facebookUrl) : ''
+            const updates = { content: nextContent, image: null, media: null }
+            if (newPostId) updates.id = newPostId
+            if (newFacebookUrl) updates.facebookUrl = newFacebookUrl
+            const res = updatePost(props.post.id, updates)
+            if (!res?.success) {
+              toast.error(res?.error || 'Failed to update post.')
+              return
+            }
+            toast.success('Post updated on LGU Page (new text post).')
+            editOpen.value = false
+            return
+          }
         }
       }
 
-      const res = updatePost(props.post.id, { content: nextContent, image: editImagePreviewUrl.value || null })
+      // Local-only update: keep existing media unless user removed it.
+      const localUpdates = { content: nextContent }
+      if (hadExistingMedia && mediaNowRemoved) {
+        localUpdates.image = null
+        localUpdates.media = null
+      }
+      const res = updatePost(props.post.id, localUpdates)
       if (!res?.success) {
         toast.error(res?.error || 'Failed to update post.')
         return
@@ -485,11 +819,17 @@ const confirmDelete = async () => {
     async () => {
       // Facebook Graph Page posts look like "<numericPageId>_<numericPostId>".
       // Local app IDs also contain "_" (e.g. "post_123"), so use a strict numeric check.
-      const looksLikeGraphPost = typeof id === 'string' && /^\d+_\d+$/.test(id)
+      const isFacebookObjectId =
+        typeof id === 'string' &&
+        ( // feed post id: "<pageId>_<postId>"
+          /^\d+_\d+$/.test(id) ||
+          // video id (from /{page-id}/videos upload) can be numeric-only
+          /^\d+$/.test(id)
+        )
 
       // Always allow deleting locally (web app), even if not logged in.
       // If we can, also attempt to delete on the Facebook Page; failures should not block local deletion.
-      if (looksLikeGraphPost && props.isAuthenticated) {
+      if (isFacebookObjectId && props.isAuthenticated) {
         const res = await facebookService.deletePost(id)
         if (!res.success) {
           toast.error(res.error || 'Deleted in the app, but failed to delete on Facebook.')
@@ -523,9 +863,24 @@ const handleLike = () => {
 
 .edit-dialog {
   width: min(620px, 100%);
-  padding: clamp(16px, 4vw, 22px);
+  padding: 0;
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
+  max-height: min(88vh, 760px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.edit-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: clamp(16px, 4vw, 22px);
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-primary);
 }
 
 .edit-title {
@@ -539,6 +894,53 @@ const handleLike = () => {
   color: var(--text-secondary);
   font-size: 0.9rem;
   line-height: 1.35;
+}
+
+.edit-close {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 80%, transparent);
+  color: var(--text-primary);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  line-height: 0;
+  transition: transform 120ms ease, background-color 120ms ease, box-shadow 120ms ease, opacity 120ms ease;
+}
+
+.edit-close svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.edit-close:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.18);
+  background: color-mix(in srgb, var(--bg-primary) 92%, transparent);
+}
+
+.edit-close:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.edit-close:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 70%, white);
+  outline-offset: 2px;
+}
+
+.edit-close:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.edit-body {
+  padding: 14px clamp(16px, 4vw, 22px);
+  overflow: auto;
 }
 
 .edit-field {
@@ -581,10 +983,15 @@ const handleLike = () => {
 }
 
 .edit-actions {
-  margin-top: var(--spacing-lg);
+  margin-top: auto;
+  padding: 12px clamp(16px, 4vw, 22px);
   display: flex;
   justify-content: flex-end;
   gap: var(--spacing-sm);
+  border-top: 1px solid var(--border);
+  background: var(--bg-primary);
+  position: sticky;
+  bottom: 0;
 }
 
 .edit-image-row {
@@ -602,12 +1009,59 @@ const handleLike = () => {
   background-color: var(--bg-tertiary);
 }
 
-.edit-preview img {
+.edit-media-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.edit-media-item {
+  position: relative;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background-color: var(--bg-tertiary);
+}
+
+.edit-media-item img {
   width: 100%;
-  height: auto;
-  max-height: 360px;
+  height: 160px;
   object-fit: cover;
   display: block;
+}
+
+.edit-media-remove {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-primary) 80%, transparent);
+  color: var(--text-primary);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  line-height: 0;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.18);
+}
+
+.edit-media-remove svg {
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+@media (max-width: 520px) {
+  .edit-media-grid {
+    grid-template-columns: 1fr;
+  }
+  .edit-media-item img {
+    height: 200px;
+  }
 }
 
 .post-card {
@@ -723,6 +1177,22 @@ const handleLike = () => {
   white-space: pre-wrap;
 }
 
+.post-text--large {
+  font-size: 1.45rem;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.post-text--normal {
+  font-size: 1.05rem;
+  line-height: 1.6;
+}
+
+.post-text--small {
+  font-size: 0.92rem;
+  line-height: 1.55;
+}
+
 .post-content p {
   margin: 0;
   font-size: 0.95rem;
@@ -742,6 +1212,200 @@ const handleLike = () => {
   height: auto;
   max-height: 400px;
   object-fit: cover;
+}
+
+.post-media-wrap {
+  margin-bottom: var(--spacing-lg);
+}
+
+.post-media {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.post-media-item {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background-color: #0b1220;
+  border: 1px solid var(--border);
+}
+
+.post-media-item img,
+.post-media-item video {
+  width: 100%;
+  height: 220px;
+  /* Show the whole image/video without cropping */
+  object-fit: contain;
+  display: block;
+}
+
+/* Videos should feel "featured" and larger than grid thumbnails */
+.post-media-item--video {
+  grid-column: 1 / -1;
+}
+
+.post-media-item--video video {
+  height: auto;
+  aspect-ratio: 16 / 9;
+  max-height: min(70vh, 560px);
+}
+
+.post-media-open {
+  position: relative;
+  display: block;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  border-radius: inherit;
+  overflow: hidden;
+  cursor: zoom-in;
+}
+
+.post-media--images img {
+  /* Collage-style tiles (like Facebook): fill the tile */
+  object-fit: cover;
+}
+
+.post-media-more {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 6, 23, 0.55);
+  color: rgba(255, 255, 255, 0.95);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  font-size: clamp(1.6rem, 4.2vw, 2.6rem);
+  text-shadow: 0 10px 22px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(1px);
+}
+
+.post-media-open:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 70%, white);
+  outline-offset: 2px;
+}
+
+.image-viewer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1600;
+  background: rgba(15, 23, 42, 0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.image-viewer {
+  position: relative;
+  /* Bigger viewer so large images can be seen clearly */
+  width: min(1320px, 96vw);
+  height: min(92vh, 860px);
+  border-radius: 16px;
+  background: rgba(2, 6, 23, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  /* Keep large images from overflowing the rounded box */
+  overflow: hidden;
+  /* Use border-box so padding reduces the available inner area correctly */
+  box-sizing: border-box;
+  /* Consistent breathing room around the image (top and bottom) */
+  padding: 44px 52px;
+  outline: none;
+}
+
+.image-viewer-stage {
+  width: 100%;
+  flex: 1 1 auto;
+  display: grid;
+  place-items: center;
+  min-height: 0;
+}
+
+.image-viewer-img {
+  /* Always show the whole image (no cropping) */
+  object-fit: contain;
+  /* Bound the image to the viewport */
+  max-width: 96vw;
+  max-height: 92vh;
+  /* No fixed height/width — let it scale down naturally */
+  width: auto;
+  height: auto;
+  display: block;
+  user-select: none;
+}
+
+.image-viewer-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.65);
+  color: white;
+  display: grid;
+  place-items: center;
+  line-height: 0;
+}
+
+.image-viewer-close svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.image-viewer-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.55);
+  color: white;
+  font-size: 28px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+}
+
+.image-viewer-prev {
+  left: 14px;
+}
+
+.image-viewer-next {
+  right: 14px;
+}
+
+@media (max-width: 520px) {
+  .image-viewer {
+    padding: 52px 18px;
+  }
+}
+
+.image-viewer-count {
+  position: static;
+  font-size: 0.9rem;
+  color: rgba(226, 232, 240, 0.9);
+  background: rgba(15, 23, 42, 0.55);
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  padding: 6px 10px;
+  border-radius: 999px;
+}
+
+.post-media-video {
+  background: #000;
 }
 
 .post-stats {
@@ -812,6 +1476,15 @@ const handleLike = () => {
 @media (max-width: 480px) {
   .post-actions {
     grid-template-columns: 1fr;
+  }
+
+  .post-media {
+    grid-template-columns: 1fr;
+  }
+
+  .post-media-item img,
+  .post-media-item video {
+    height: 240px;
   }
 }
 </style>

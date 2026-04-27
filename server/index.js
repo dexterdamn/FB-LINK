@@ -5,6 +5,7 @@ import multer from 'multer'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import dotenv from 'dotenv'
+import fs from 'fs/promises'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -15,10 +16,58 @@ const app = express()
 app.use(cookieParser())
 app.use(express.json({ limit: '1mb' }))
 
+const UPLOADS_DIR = path.join(__dirname, 'uploads')
+// Serve uploaded media so the web app can play videos after refresh.
+app.use('/api/uploads', express.static(UPLOADS_DIR, { fallthrough: false }))
+
 const pageImageUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }
 })
+
+// Supports multiple images (up to 10) and a single video.
+// Note: Facebook video uploads can be large; we allow a bigger size here.
+const pageMediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 50 * 1024 * 1024,
+    files: 10
+  }
+})
+
+async function ensureUploadsDir() {
+  try {
+    await fs.mkdir(UPLOADS_DIR, { recursive: true })
+  } catch {
+    // ignore
+  }
+}
+
+function sanitizeFilename(name) {
+  const base = String(name || 'media')
+    .replace(/[^a-zA-Z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  return base || 'media'
+}
+
+async function persistUploadedMediaFile(file) {
+  if (!file) return null
+  const mimetype = String(file?.mimetype || '')
+  const isVideo = mimetype.startsWith('video/')
+  const ext =
+    path.extname(String(file?.originalname || '')).slice(0, 12) ||
+    (isVideo ? '.mp4' : '.bin')
+  const safeName = sanitizeFilename(path.basename(String(file?.originalname || 'media'), path.extname(String(file?.originalname || ''))))
+  const fname = `${Date.now()}_${crypto.randomBytes(8).toString('hex')}_${safeName}${ext}`
+  await ensureUploadsDir()
+  const full = path.join(UPLOADS_DIR, fname)
+  if (file?.buffer) {
+    await fs.writeFile(full, file.buffer)
+  } else {
+    return null
+  }
+  return { urlPath: `/api/uploads/${encodeURIComponent(fname)}`, filename: fname }
+}
 
 app.use((req, _res, next) => {
   // Minimal request logging to debug OAuth redirects locally
@@ -276,6 +325,61 @@ async function createPageFeedPost({ pageId, pageAccessToken, message, link, pict
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: params.toString()
   })
+  const j = await r.json().catch(() => null)
+  return { ok: r.ok && !j?.error, status: r.status, data: j }
+}
+
+/**
+ * Upload a photo to a Page (optionally unpublished) and return the media id.
+ * Used for multi-image posts (attached_media).
+ */
+async function uploadPagePhoto({ pageId, pageAccessToken, file, message = '', published = false }) {
+  const form = new FormData()
+  form.append('access_token', pageAccessToken)
+  if (message) form.append('message', message)
+  form.append('published', published ? 'true' : 'false')
+  const blob = new Blob([file.buffer], { type: file.mimetype || 'application/octet-stream' })
+  form.append('source', blob, file.originalname || 'photo.jpg')
+
+  const url = `${graphBase()}/${encodeURIComponent(pageId)}/photos`
+  const r = await fetch(url, { method: 'POST', body: form })
+  const j = await r.json().catch(() => null)
+  return { ok: r.ok && !j?.error, status: r.status, data: j }
+}
+
+/**
+ * Create a multi-image feed post using attached_media.
+ * Facebook expects params: attached_media[0]={"media_fbid":"<id>"}...
+ */
+async function createPageMultiImagePost({ pageId, pageAccessToken, message, mediaFbids = [], published = true }) {
+  const params = new URLSearchParams()
+  params.set('access_token', pageAccessToken)
+  if (message) params.set('message', message)
+  params.set('published', published ? 'true' : 'false')
+  mediaFbids.forEach((id, idx) => {
+    params.set(`attached_media[${idx}]`, JSON.stringify({ media_fbid: String(id) }))
+  })
+
+  const r = await fetch(`${graphBase()}/${encodeURIComponent(pageId)}/feed`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString()
+  })
+  const j = await r.json().catch(() => null)
+  return { ok: r.ok && !j?.error, status: r.status, data: j }
+}
+
+/** Upload a video to a Page (single file). */
+async function uploadPageVideo({ pageId, pageAccessToken, file, description = '' }) {
+  const form = new FormData()
+  form.append('access_token', pageAccessToken)
+  if (description) form.append('description', description)
+  const blob = new Blob([file.buffer], { type: file.mimetype || 'application/octet-stream' })
+  // Graph uses "source" for file upload in many endpoints
+  form.append('source', blob, file.originalname || 'video.mp4')
+
+  const url = `${graphBase()}/${encodeURIComponent(pageId)}/videos`
+  const r = await fetch(url, { method: 'POST', body: form })
   const j = await r.json().catch(() => null)
   return { ok: r.ok && !j?.error, status: r.status, data: j }
 }
@@ -777,6 +881,137 @@ app.post('/api/server/page/photo-post', pageImageUpload.single('image'), async (
 })
 
 /**
+ * Option B: Publish media (multiple images OR single video) using the server token.
+ * Form fields: message?, files: media[]
+ */
+app.post('/api/server/page/media-post', pageMediaUpload.array('media', 10), async (req, res) => {
+  if (!requireServerPageConfig(res)) return
+  const message = String(req.body?.message || '').trim()
+  const files = Array.isArray(req.files) ? req.files : []
+  if (!message && files.length === 0) {
+    return res.status(400).json({ success: false, error: 'Add a message, images, or a video.' })
+  }
+
+  const videos = files.filter((f) => String(f?.mimetype || '').startsWith('video/'))
+  const images = files.filter((f) => String(f?.mimetype || '').startsWith('image/'))
+  if (videos.length > 1) {
+    return res.status(400).json({ success: false, error: 'Only one video can be uploaded per post.' })
+  }
+  if (videos.length === 1 && images.length > 0) {
+    return res.status(400).json({ success: false, error: 'Please upload either images OR a video (not both).' })
+  }
+  if (images.length > 10) {
+    return res.status(400).json({ success: false, error: 'Maximum 10 images per post.' })
+  }
+
+  try {
+    // Video flow
+    if (videos.length === 1) {
+      const vid = videos[0]
+      const saved = await persistUploadedMediaFile(vid)
+      const vr = await uploadPageVideo({
+        pageId: SERVER_PAGE_ID,
+        pageAccessToken: SERVER_PAGE_ACCESS_TOKEN,
+        file: vid,
+        description: message
+      })
+      const data = vr.data
+      if (!vr.ok) {
+        const fbMsg = data?.error?.message || ''
+        return res.status(400).json({
+          success: false,
+          error: data?.error?.message || `Facebook video upload failed (${vr.status}).`,
+          details: data?.error || data,
+          hint: buildTokenInvalidHint(fbMsg)
+        })
+      }
+      const postId = data?.id || null
+      const facebookUrl = buildFacebookPermalinkFromPostId(postId)
+      return res.json({
+        success: true,
+        postId,
+        facebookUrl,
+        mediaType: 'video',
+        media: saved?.urlPath ? [{ kind: 'video', url: saved.urlPath, name: vid?.originalname || '' }] : [{ kind: 'video' }]
+      })
+    }
+
+    // Multi-image flow (or message-only fallback)
+    if (images.length > 0) {
+      const uploaded = []
+      for (const img of images) {
+        const ur = await uploadPagePhoto({
+          pageId: SERVER_PAGE_ID,
+          pageAccessToken: SERVER_PAGE_ACCESS_TOKEN,
+          file: img,
+          message: '',
+          published: false
+        })
+        const d = ur.data
+        if (!ur.ok) {
+          const fbMsg = d?.error?.message || ''
+          return res.status(400).json({
+            success: false,
+            error: d?.error?.message || `Facebook image upload failed (${ur.status}).`,
+            details: d?.error || d,
+            hint: buildTokenInvalidHint(fbMsg)
+          })
+        }
+        // Unpublished photo id is returned in "id"
+        const mediaId = d?.id || null
+        if (mediaId) uploaded.push(mediaId)
+      }
+
+      const pr = await createPageMultiImagePost({
+        pageId: SERVER_PAGE_ID,
+        pageAccessToken: SERVER_PAGE_ACCESS_TOKEN,
+        message,
+        mediaFbids: uploaded,
+        published: true
+      })
+      const pd = pr.data
+      if (!pr.ok) {
+        const fbMsg = pd?.error?.message || ''
+        return res.status(400).json({
+          success: false,
+          error: pd?.error?.message || `Facebook multi-image post failed (${pr.status}).`,
+          details: pd?.error || pd,
+          hint: buildTokenInvalidHint(fbMsg)
+        })
+      }
+      const postId = pd?.id || null
+      const facebookUrl = buildFacebookPermalinkFromPostId(postId)
+      return res.json({ success: true, postId, facebookUrl, mediaType: 'images', imagesCount: images.length })
+    }
+
+    // Message-only fallback
+    const postRes = await createPageFeedPost({
+      pageId: SERVER_PAGE_ID,
+      pageAccessToken: SERVER_PAGE_ACCESS_TOKEN,
+      message,
+      link: '',
+      picture: '',
+      published: true
+    })
+    const data = postRes.data
+    if (!postRes.ok) {
+      const fbMsg = data?.error?.message || ''
+      return res.status(400).json({
+        success: false,
+        error: data?.error?.message || `Facebook feed post failed (${postRes.status}).`,
+        details: data?.error || data,
+        hint: buildTokenInvalidHint(fbMsg)
+      })
+    }
+    const postId = data?.id || null
+    const facebookUrl = buildFacebookPermalinkFromPostId(postId)
+    return res.json({ success: true, postId, facebookUrl, mediaType: 'text' })
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e?.message || 'Failed to publish media post.' })
+  }
+})
+
+/**
  * Publish flow (requested):
  * Web app post -> post to Office Page -> optionally share Office post to LGU Page.
  *
@@ -1022,6 +1257,243 @@ app.post('/api/page/photo-post', pageImageUpload.single('image'), async (req, re
     })
   } catch (e) {
     return res.status(500).json({ success: false, error: e?.message || 'Failed to publish photo.' })
+  }
+})
+
+/**
+ * Web app: post media (multiple images OR single video) to a Facebook Page using session tokens.
+ * Form fields: pageId, message?, files: media[]
+ */
+app.post('/api/page/media-post', pageMediaUpload.array('media', 10), async (req, res) => {
+  const s = requireAuth(req, res)
+  if (!s) return
+
+  const pageId = String(req.body?.pageId || '')
+  const message = String(req.body?.message || '').trim()
+  const files = Array.isArray(req.files) ? req.files : []
+
+  if (!pageId) return res.status(400).json({ success: false, error: 'Missing pageId.' })
+  if (!message && files.length === 0) {
+    return res.status(400).json({ success: false, error: 'Add a message, images, or a video.' })
+  }
+
+  const lguCheck = assertRequestTargetsLguPage(s, pageId)
+  if (!lguCheck.ok) {
+    return res.status(400).json({ success: false, error: lguCheck.error })
+  }
+
+  const page = findManagedPage(s, pageId)
+  if (!page?.access_token) {
+    return res.status(400).json({
+      success: false,
+      error: 'Page access token not found. Re-login and pick a Page you manage.'
+    })
+  }
+
+  const videos = files.filter((f) => String(f?.mimetype || '').startsWith('video/'))
+  const images = files.filter((f) => String(f?.mimetype || '').startsWith('image/'))
+  if (videos.length > 1) {
+    return res.status(400).json({ success: false, error: 'Only one video can be uploaded per post.' })
+  }
+  if (videos.length === 1 && images.length > 0) {
+    return res.status(400).json({ success: false, error: 'Please upload either images OR a video (not both).' })
+  }
+  if (images.length > 10) {
+    return res.status(400).json({ success: false, error: 'Maximum 10 images per post.' })
+  }
+
+  async function withFreshToken(fn) {
+    try {
+      return await fn(page.access_token)
+    } catch (e) {
+      throw e
+    }
+  }
+
+  try {
+    // Single video flow
+    if (videos.length === 1) {
+      const vid = videos[0]
+      const saved = await persistUploadedMediaFile(vid)
+      let vr = await withFreshToken((token) =>
+        uploadPageVideo({ pageId, pageAccessToken: token, file: vid, description: message })
+      )
+      let data = vr.data
+      if (!vr.ok) {
+        const fbMsg = data?.error?.message || ''
+        if (isFacebookTokenInvalid(data?.error) || isSessionInvalidLoggedOutError(fbMsg)) {
+          const refreshed = await refreshSessionPages(s)
+          if (refreshed.success) {
+            const freshPage = findManagedPage(s, pageId)
+            if (freshPage?.access_token) {
+              vr = await uploadPageVideo({
+                pageId,
+                pageAccessToken: freshPage.access_token,
+                file: vid,
+                description: message
+              })
+              data = vr.data
+            }
+          }
+        }
+      }
+
+      if (!vr.ok) {
+        return res.status(400).json({
+          success: false,
+          error: data?.error?.message || `Facebook video upload failed (${vr.status}).`,
+          details: data?.error || data,
+          hint: buildTokenInvalidHint(data?.error?.message || '')
+        })
+      }
+
+      const postId = data?.id || null
+      const facebookUrl = buildFacebookPermalinkFromPostId(postId)
+      return res.json({
+        success: true,
+        postId,
+        facebookUrl,
+        mediaType: 'video',
+        media: saved?.urlPath ? [{ kind: 'video', url: saved.urlPath, name: vid?.originalname || '' }] : [{ kind: 'video' }]
+      })
+    }
+
+    // Multi-image flow
+    if (images.length > 0) {
+      const uploaded = []
+
+      for (const img of images) {
+        let ur = await uploadPagePhoto({
+          pageId,
+          pageAccessToken: page.access_token,
+          file: img,
+          message: '',
+          published: false
+        })
+        let d = ur.data
+        if (!ur.ok) {
+          const fbMsg = d?.error?.message || ''
+          if (isFacebookTokenInvalid(d?.error) || isSessionInvalidLoggedOutError(fbMsg)) {
+            const refreshed = await refreshSessionPages(s)
+            if (refreshed.success) {
+              const freshPage = findManagedPage(s, pageId)
+              if (freshPage?.access_token) {
+                ur = await uploadPagePhoto({
+                  pageId,
+                  pageAccessToken: freshPage.access_token,
+                  file: img,
+                  message: '',
+                  published: false
+                })
+                d = ur.data
+              }
+            }
+          }
+        }
+        if (!ur.ok) {
+          return res.status(400).json({
+            success: false,
+            error: d?.error?.message || `Facebook image upload failed (${ur.status}).`,
+            details: d?.error || d,
+            hint: buildTokenInvalidHint(d?.error?.message || '')
+          })
+        }
+        const mediaId = d?.id || null
+        if (mediaId) uploaded.push(mediaId)
+      }
+
+      let pr = await createPageMultiImagePost({
+        pageId,
+        pageAccessToken: page.access_token,
+        message,
+        mediaFbids: uploaded,
+        published: true
+      })
+      let pd = pr.data
+      if (!pr.ok) {
+        const fbMsg = pd?.error?.message || ''
+        if (isFacebookTokenInvalid(pd?.error) || isSessionInvalidLoggedOutError(fbMsg)) {
+          const refreshed = await refreshSessionPages(s)
+          if (refreshed.success) {
+            const freshPage = findManagedPage(s, pageId)
+            if (freshPage?.access_token) {
+              pr = await createPageMultiImagePost({
+                pageId,
+                pageAccessToken: freshPage.access_token,
+                message,
+                mediaFbids: uploaded,
+                published: true
+              })
+              pd = pr.data
+            }
+          }
+        }
+      }
+      if (!pr.ok) {
+        return res.status(400).json({
+          success: false,
+          error: pd?.error?.message || `Facebook multi-image post failed (${pr.status}).`,
+          details: pd?.error || pd,
+          hint: buildTokenInvalidHint(pd?.error?.message || '')
+        })
+      }
+      const postId = pd?.id || null
+      const facebookUrl = buildFacebookPermalinkFromPostId(postId)
+      return res.json({ success: true, postId, facebookUrl, mediaType: 'images', imagesCount: images.length })
+    }
+
+    // Message-only fallback
+    const postRes = await createPageFeedPost({
+      pageId,
+      pageAccessToken: page.access_token,
+      message,
+      link: '',
+      picture: '',
+      published: true
+    })
+    const data = postRes.data
+    if (!postRes.ok) {
+      const fbMsg = data?.error?.message || ''
+      if (isFacebookTokenInvalid(data?.error) || isSessionInvalidLoggedOutError(fbMsg)) {
+        const refreshed = await refreshSessionPages(s)
+        if (refreshed.success) {
+          const freshPage = findManagedPage(s, pageId)
+          if (freshPage?.access_token) {
+            const retry = await createPageFeedPost({
+              pageId,
+              pageAccessToken: freshPage.access_token,
+              message,
+              link: '',
+              picture: '',
+              published: true
+            })
+            const rd = retry.data
+            if (retry.ok && !rd?.error) {
+              const postId = rd?.id || null
+              const facebookUrl = buildFacebookPermalinkFromPostId(postId)
+              return res.json({
+                success: true,
+                postId,
+                facebookUrl,
+                mediaType: 'text',
+                refreshed: true
+              })
+            }
+          }
+        }
+      }
+      return res.status(400).json({
+        success: false,
+        error: data?.error?.message || `Facebook feed post failed (${postRes.status}).`,
+        details: data?.error || data,
+        hint: buildTokenInvalidHint(fbMsg)
+      })
+    }
+    const postId = data?.id || null
+    const facebookUrl = buildFacebookPermalinkFromPostId(postId)
+    return res.json({ success: true, postId, facebookUrl, mediaType: 'text' })
+  } catch (e) {
+    return res.status(500).json({ success: false, error: e?.message || 'Failed to publish media post.' })
   }
 })
 
@@ -1473,7 +1945,8 @@ app.get('/api/lgu/feed', async (req, res) => {
   }
 
   try {
-    const fields = 'id,message,created_time,permalink_url'
+    const fields =
+      'id,message,created_time,permalink_url,attachments{media_type,url,media,subattachments{media_type,url,media}}'
     const url = `${graphBase()}/${encodeURIComponent(pageId)}/feed?fields=${encodeURIComponent(
       fields
     )}&limit=${limit}&access_token=${encodeURIComponent(page.access_token)}`
@@ -1499,11 +1972,42 @@ app.get('/api/lgu/feed', async (req, res) => {
     }
 
     const items = Array.isArray(data?.data) ? data.data : []
+    function flattenAttachmentsMedia(attachments) {
+      const out = []
+      const list = Array.isArray(attachments?.data) ? attachments.data : []
+      for (const a of list) {
+        const mediaType = String(a?.media_type || '')
+        const directUrl = typeof a?.url === 'string' ? a.url : ''
+        const mediaSrc =
+          typeof a?.media?.source === 'string'
+            ? a.media.source
+            : (typeof a?.media?.image?.src === 'string' ? a.media.image.src : '')
+        const url = directUrl || mediaSrc || ''
+        if (url) {
+          const kind = /video/i.test(mediaType) ? 'video' : 'image'
+          out.push({ kind, url })
+        }
+        const subs = Array.isArray(a?.subattachments?.data) ? a.subattachments.data : []
+        for (const sa of subs) {
+          const smt = String(sa?.media_type || '')
+          const sUrl =
+            (typeof sa?.url === 'string' ? sa.url : '') ||
+            (typeof sa?.media?.image?.src === 'string' ? sa.media.image.src : '') ||
+            (typeof sa?.media?.source === 'string' ? sa.media.source : '')
+          if (sUrl) {
+            const kind = /video/i.test(smt) ? 'video' : 'image'
+            out.push({ kind, url: sUrl })
+          }
+        }
+      }
+      return out
+    }
     const posts = items.map((p) => ({
       id: p.id,
       content: p.message || '',
       createdAt: p.created_time || new Date().toISOString(),
-      facebookUrl: p.permalink_url || null
+      facebookUrl: p.permalink_url || null,
+      media: flattenAttachmentsMedia(p.attachments)
     }))
 
     return res.json({ success: true, posts })
