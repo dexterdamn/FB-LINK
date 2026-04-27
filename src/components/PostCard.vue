@@ -54,11 +54,74 @@
           </div>
 
           <div class="edit-body">
-            <label class="edit-field">
-              <span class="edit-label">Message</span>
-              <textarea v-model="editContent" class="edit-textarea" rows="4" maxlength="500" />
-              <span class="edit-hint">{{ (editContent || '').length }}/500</span>
-            </label>
+            <div class="edit-top-grid">
+              <label class="edit-field edit-field--message">
+                <span class="edit-label">Message</span>
+                <textarea v-model="editContent" class="edit-textarea" rows="6" maxlength="500" />
+                <span class="edit-hint">{{ (editContent || '').length }}/500</span>
+              </label>
+
+              <div v-if="hasExistingMedia" class="edit-field edit-field--currentMedia">
+                <div class="edit-image-row">
+                  <span class="edit-label">Current media</span>
+                  <div class="edit-current-actions">
+                    <button
+                      v-if="editMediaMode !== 'keep'"
+                      type="button"
+                      class="btn btn-secondary btn-small"
+                      :disabled="editSaving"
+                      @click="keepExistingMedia"
+                    >
+                      Keep
+                    </button>
+                    <button
+                      v-if="editMediaMode !== 'remove'"
+                      type="button"
+                      class="btn btn-secondary btn-small"
+                      :disabled="editSaving"
+                      @click="markRemoveExistingMedia"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+
+                <div class="edit-current-preview" :class="{ 'edit-current-preview--removed': editMediaMode === 'remove' }">
+                  <div v-if="existingVideoMedia.length" class="post-media post-media--videos">
+                    <div
+                      v-for="(m, idx) in existingVideoMedia"
+                      :key="`edit_video_${idx}`"
+                      class="post-media-item post-media-item--video"
+                    >
+                      <video v-if="m.url" :src="m.url" controls playsinline class="post-media-video" />
+                    </div>
+                  </div>
+
+                  <div
+                    v-if="existingImageMedia.length"
+                    class="post-media post-media--images"
+                    :class="{ 'post-media--single': existingImageMedia.length === 1 && !existingVideoMedia.length }"
+                  >
+                    <div
+                      v-for="(m, idx) in existingVisibleImageMedia"
+                      :key="`edit_img_${m.url}_${idx}`"
+                      class="post-media-item"
+                      :class="{ 'post-media-item--single': existingImageMedia.length === 1 && !existingVideoMedia.length }"
+                    >
+                      <img :src="m.url" :alt="editContent || ''" />
+                      <div
+                        v-if="idx === 3 && existingExtraImageCount > 0"
+                        class="post-media-more"
+                        aria-hidden="true"
+                      >
+                        +{{ existingExtraImageCount }}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div class="edit-field">
               <div class="edit-image-row">
                 <span class="edit-label">Media</span>
@@ -372,6 +435,7 @@ const editSaving = ref(false)
 const editDialogRef = ref(null)
 const editMediaFiles = ref([])
 const editMediaPreviews = ref([]) // { key, url, name }
+const editMediaMode = ref('keep') // 'keep' | 'remove' | 'replace'
 const operationOverlayOpen = ref(false)
 const operationOverlayTitle = ref('')
 const operationOverlaySubtitle = ref('')
@@ -453,6 +517,12 @@ const extraImageCount = computed(() => Math.max(0, imageMedia.value.length - vis
 
 const viewerImages = computed(() => normalizedMedia.value.filter((m) => m?.kind === 'image' && m?.url))
 const activeViewerUrl = computed(() => viewerImages.value?.[viewerIndex.value]?.url || '')
+
+const hasExistingMedia = computed(() => normalizedMedia.value.some((m) => (m?.kind === 'image' || m?.kind === 'video') && m?.url))
+const existingImageMedia = computed(() => imageMedia.value)
+const existingVideoMedia = computed(() => videoMedia.value)
+const existingVisibleImageMedia = computed(() => existingImageMedia.value.slice(0, 4))
+const existingExtraImageCount = computed(() => Math.max(0, existingImageMedia.value.length - existingVisibleImageMedia.value.length))
 
 async function openImageViewer(idx) {
   const imgs = viewerImages.value
@@ -557,6 +627,7 @@ const handleEdit = async () => {
   editContent.value = String(props.post?.content || '')
   editMediaFiles.value = []
   editMediaPreviews.value = []
+  editMediaMode.value = 'keep'
   editOpen.value = true
   await nextTick()
   editDialogRef.value?.focus?.()
@@ -608,6 +679,7 @@ const onEditDropzoneFilesSelected = async (files) => {
     editMediaFiles.value = normalized
   }
   editMediaFiles.value = normalized
+  editMediaMode.value = normalized.length ? 'replace' : editMediaMode.value
   editMediaPreviews.value = []
   try {
     for (const f of normalized) {
@@ -616,6 +688,7 @@ const onEditDropzoneFilesSelected = async (files) => {
   } catch (err) {
     editMediaFiles.value = []
     editMediaPreviews.value = []
+    editMediaMode.value = 'keep'
     toast.error(err?.message || 'Could not load image preview.')
   }
 }
@@ -623,6 +696,8 @@ const onEditDropzoneFilesSelected = async (files) => {
 const clearEditMedia = () => {
   editMediaFiles.value = []
   editMediaPreviews.value = []
+  // Clearing chosen media should revert to the "keep current" mode (unless user explicitly removed current).
+  if (editMediaMode.value === 'replace') editMediaMode.value = 'keep'
 }
 
 function removeEditMediaAt(idx) {
@@ -630,6 +705,19 @@ function removeEditMediaAt(idx) {
   if (!Number.isFinite(i)) return
   editMediaFiles.value.splice(i, 1)
   editMediaPreviews.value.splice(i, 1)
+  if (editMediaMode.value === 'replace' && editMediaFiles.value.length === 0) editMediaMode.value = 'keep'
+}
+
+function keepExistingMedia() {
+  editMediaMode.value = 'keep'
+  editMediaFiles.value = []
+  editMediaPreviews.value = []
+}
+
+function markRemoveExistingMedia() {
+  editMediaMode.value = 'remove'
+  editMediaFiles.value = []
+  editMediaPreviews.value = []
 }
 
 function formatBytes(bytes) {
@@ -674,7 +762,7 @@ const saveEdit = async () => {
       }
 
       const hadExistingMedia = normalizedMedia.value.some((m) => m?.kind === 'image' || m?.kind === 'video')
-      const mediaNowRemoved = hadExistingMedia && editMediaFiles.value.length === 0 && editMediaPreviews.value.length === 0
+      const mediaNowRemoved = hadExistingMedia && editMediaMode.value === 'remove'
 
       // If this is a real Facebook Page post and user is signed in, update it on Facebook too.
       if (isFacebookObjectId && props.isAuthenticated) {
@@ -729,7 +817,7 @@ const saveEdit = async () => {
 
         // Facebook does not support replacing media in-place.
         // If user picked new media (image/video), create a NEW media post then delete the old one.
-        if (editMediaFiles.value.length && pageId) {
+        if (editMediaMode.value === 'replace' && editMediaFiles.value.length && pageId) {
           const url = '/api/page/media-post'
 
           const fd = new FormData()
@@ -983,6 +1071,26 @@ const handleLike = () => {
   overflow: auto;
 }
 
+.edit-top-grid {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+/* Keep edit layout vertical (stacked rows) on all sizes */
+.edit-top-grid {
+  grid-template-columns: 1fr;
+  align-items: start;
+}
+
+.edit-field--message {
+  min-width: 0;
+}
+
+.edit-field--currentMedia {
+  min-width: 0;
+}
+
 .edit-field {
   display: flex;
   flex-direction: column;
@@ -1039,6 +1147,55 @@ const handleLike = () => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.edit-current-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.edit-current-preview {
+  margin-top: 10px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--bg-secondary);
+  padding: 8px;
+}
+
+.edit-current-preview--removed {
+  opacity: 0.55;
+  filter: grayscale(0.25);
+}
+
+/* Compact media preview inside Edit dialog (vertical layout) */
+.edit-current-preview .post-media {
+  gap: 8px;
+}
+
+.edit-current-preview .post-media-item img,
+.edit-current-preview .post-media-item video {
+  height: 170px;
+}
+
+.edit-current-preview .post-media--single .post-media-item img {
+  height: auto;
+  aspect-ratio: 16 / 9;
+  max-height: 240px;
+  object-fit: cover;
+}
+
+@media (max-width: 520px) {
+  .edit-current-preview .post-media-item img,
+  .edit-current-preview .post-media-item video {
+    height: 150px;
+  }
+
+  .edit-current-preview .post-media--single .post-media-item img {
+    max-height: 210px;
+  }
 }
 
 .edit-preview {
