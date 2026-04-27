@@ -584,7 +584,7 @@ async function confirmPublish() {
     const pageOk = pages.some((p) => String(p.id) === String(pageId))
     if (!pageId || !pageOk) {
       toast.error(
-        'Pumili ng Facebook Page sa dropdown, o mag-login muli (kailangan ang Page sa session: pages_show_list, pages_manage_posts).'
+        'Select a Facebook Page from the dropdown, or sign in again (your session must include a Page: pages_show_list, pages_manage_posts).'
       )
       return
     }
@@ -677,7 +677,7 @@ async function confirmPublish() {
       toast.error(publishRes?.error || 'Saved in app, but failed to publish to Facebook Page.')
     } else {
       toast.success(
-        `Success: na-post na sa Facebook Page na "${confirmTargetPageName.value}". Buksan ang Page para tingnan ang Posts.`,
+        `Success: posted to the Facebook Page "${confirmTargetPageName.value}". Open the Page to view your post.`,
         { durationMs: 6500 }
       )
       const fbUrl = typeof publishRes.facebookUrl === 'string' ? publishRes.facebookUrl.trim() : ''
