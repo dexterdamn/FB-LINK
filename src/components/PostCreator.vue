@@ -112,7 +112,7 @@
         <ImageDropzone
           :disabled="isSubmitting || !isAuthenticated"
           title="Click to upload images or a video"
-          subtitle="Up to 10 images OR 1 video"
+          subtitle="Up to 10 images + 1 video"
           accept="image/*,video/*"
           :multiple="true"
           @files-selected="onDropzoneFilesSelected"
@@ -231,6 +231,20 @@
             >
               {{ isSubmitting ? 'Publishing…' : 'Confirm' }}
             </button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <Teleport to="body">
+      <div v-if="isSubmitting" class="fullscreen-loading" role="status" aria-live="polite">
+        <div class="fullscreen-loading__panel" role="presentation">
+          <div class="fullscreen-loading__spinnerWrap" aria-hidden="true">
+            <span class="fullscreen-loading__spinner"></span>
+          </div>
+          <div class="fullscreen-loading__content">
+            <div class="fullscreen-loading__title">Publishing post</div>
+            <div class="fullscreen-loading__subtitle">Uploading media and posting to Facebook…</div>
           </div>
         </div>
       </div>
@@ -411,18 +425,40 @@ function normalizeSelection(existingFiles, newFiles) {
   const merged = [...existing, ...incoming]
   if (!merged.length) return { files: [], error: null }
 
-  const images = merged.filter((f) => String(f?.type || '').startsWith('image/'))
-  const videos = merged.filter((f) => String(f?.type || '').startsWith('video/'))
-  const others = merged.filter(
-    (f) => !String(f?.type || '').startsWith('image/') && !String(f?.type || '').startsWith('video/')
-  )
-
+  const others = merged.filter((f) => {
+    const t = String(f?.type || '')
+    return !t.startsWith('image/') && !t.startsWith('video/')
+  })
   if (others.length) return { files: [], error: 'Images or videos only.' }
-  if (videos.length > 1) return { files: videos.slice(0, 1), error: 'Only 1 video is allowed.' }
-  if (videos.length === 1 && images.length > 0) return { files: [videos[0]], error: 'Please choose either images OR a video (not both).' }
-  if (videos.length === 1) return { files: [videos[0]], error: null }
-  if (images.length > 10) return { files: images.slice(0, 10), error: 'Up to 10 images only.' }
-  return { files: images, error: null }
+
+  const out = []
+  let imageCount = 0
+  let videoCount = 0
+  let trimmed = false
+
+  for (const f of merged) {
+    const t = String(f?.type || '')
+    if (t.startsWith('image/')) {
+      if (imageCount < 10) {
+        out.push(f)
+        imageCount += 1
+      } else {
+        trimmed = true
+      }
+      continue
+    }
+    if (t.startsWith('video/')) {
+      if (videoCount < 1) {
+        out.push(f)
+        videoCount += 1
+      } else {
+        trimmed = true
+      }
+      continue
+    }
+  }
+
+  return { files: out, error: trimmed ? 'Max 10 images and 1 video only.' : null }
 }
 
 const onDropzoneFilesSelected = async (files) => {
@@ -575,10 +611,21 @@ async function confirmPublish() {
         body: fd
       })
       const data = await res.json().catch(() => ({}))
-      publishRes =
-        res.ok && data.success
-          ? { success: true, postId: data.postId, facebookUrl: data.facebookUrl, media: Array.isArray(data.media) ? data.media : null }
-          : { success: false, error: data.error || `Publish failed (${res.status}).` }
+      if (res.ok && data.success) {
+        const results = Array.isArray(data.results) ? data.results : null
+        const primary = results?.[0] || data
+        const mergedMedia = results
+          ? results.flatMap((r) => (Array.isArray(r?.media) ? r.media : []))
+          : (Array.isArray(data.media) ? data.media : [])
+        publishRes = {
+          success: true,
+          postId: primary?.postId || data.postId,
+          facebookUrl: primary?.facebookUrl || data.facebookUrl,
+          media: mergedMedia.length ? mergedMedia : null
+        }
+      } else {
+        publishRes = { success: false, error: data.error || `Publish failed (${res.status}).` }
+      }
     } else {
       const url = guestMode ? '/api/server/page/post' : '/api/lgu/posts'
       const res = await fetch(url, {
@@ -603,10 +650,10 @@ async function confirmPublish() {
           name: typeof m?.name === 'string' ? m.name : ''
         }))
       : mediaPreviews.value
-          .filter((m) => m?.kind === 'image' && m?.previewUrl)
-          .slice(0, 10)
-          // Data URLs are safe to persist and will still render after refresh.
-          .map((m) => ({ kind: 'image', url: m.previewUrl, name: m.name || '' }))
+          .filter((m) => (m?.kind === 'image' || m?.kind === 'video') && m?.previewUrl)
+          .slice(0, 11)
+          // Images use Data URLs; videos use object URLs (preview-only until the API returns durable URLs).
+          .map((m) => ({ kind: m?.kind === 'video' ? 'video' : 'image', url: m.previewUrl, name: m.name || '' }))
 
     emit('post-created', {
       id: publishRes.postId || undefined,
@@ -660,7 +707,6 @@ const validationWarnings = computed(() => {
     if (imagesCount > 10) warnings.push('Up to 10 images only.')
     if (imagesCount === 10) warnings.push('Limit reached: 10 images only.')
     if (videosCount > 1) warnings.push('Only 1 video is allowed.')
-    if (videosCount === 1 && imagesCount > 0) warnings.push('Choose either images OR a video (not both).')
   }
   if (isNearLimit.value) warnings.push('You are near the 500 character limit.')
   return warnings
@@ -684,6 +730,7 @@ const mediaConfirmSummary = computed(() => {
   const files = mediaFiles.value
   const i = files.filter((f) => String(f?.type || '').startsWith('image/')).length
   const v = files.filter((f) => String(f?.type || '').startsWith('video/')).length
+  if (v === 1 && i > 0) return `1 video + ${i} image${i === 1 ? '' : 's'}`
   if (v === 1) return '1 video'
   if (i === 1) return '1 image'
   if (i > 1) return `${i} images`

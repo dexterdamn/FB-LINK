@@ -189,13 +189,18 @@
         </div>
       </div>
 
-      <!-- Images: Facebook-style collage (show up to 4 + overlay count) -->
-      <div v-if="imageMedia.length" class="post-media post-media--images">
+      <!-- Images: single image should feel featured; otherwise collage tiles -->
+      <div
+        v-if="imageMedia.length"
+        class="post-media post-media--images"
+        :class="{ 'post-media--single': imageMedia.length === 1 && !videoMedia.length }"
+      >
         <button
           v-for="(m, idx) in visibleImageMedia"
           :key="`img_${m.url}_${idx}`"
           type="button"
           class="post-media-open post-media-item"
+          :class="{ 'post-media-item--single': imageMedia.length === 1 && !videoMedia.length }"
           :aria-label="`View image ${idx + 1}`"
           @click="openImageViewer(idx)"
         >
@@ -741,6 +746,9 @@ const saveEdit = async () => {
             return
           }
 
+          const results = Array.isArray(j?.results) ? j.results : null
+          const primary = results?.[0] || j
+
           try {
             const del = await facebookService.deletePost(id)
             if (!del?.success) {
@@ -750,8 +758,8 @@ const saveEdit = async () => {
             // ignore delete errors
           }
 
-          const newPostId = j?.postId ? String(j.postId) : ''
-          const newFacebookUrl = j?.facebookUrl ? String(j.facebookUrl) : ''
+          const newPostId = primary?.postId ? String(primary.postId) : ''
+          const newFacebookUrl = primary?.facebookUrl ? String(primary.facebookUrl) : ''
           // Locally store previews so the app can display immediately.
           const localMedia = editMediaPreviews.value.map((p) => ({ kind: 'image', url: p.url, name: p.name }))
           const updates = {
@@ -1356,6 +1364,17 @@ const handleLike = () => {
 
 .post-media--images img {
   /* Collage-style tiles (like Facebook): fill the tile */
+  object-fit: cover;
+}
+
+.post-media--single {
+  grid-template-columns: 1fr;
+}
+
+.post-media-item--single img {
+  height: auto;
+  aspect-ratio: 16 / 9;
+  max-height: min(72vh, 620px);
   object-fit: cover;
 }
 

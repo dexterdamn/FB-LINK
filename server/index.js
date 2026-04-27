@@ -31,7 +31,7 @@ const pageMediaUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: 50 * 1024 * 1024,
-    files: 10
+    files: 11
   }
 })
 
@@ -884,7 +884,7 @@ app.post('/api/server/page/photo-post', pageImageUpload.single('image'), async (
  * Option B: Publish media (multiple images OR single video) using the server token.
  * Form fields: message?, files: media[]
  */
-app.post('/api/server/page/media-post', pageMediaUpload.array('media', 10), async (req, res) => {
+app.post('/api/server/page/media-post', pageMediaUpload.array('media', 11), async (req, res) => {
   if (!requireServerPageConfig(res)) return
   const message = String(req.body?.message || '').trim()
   const files = Array.isArray(req.files) ? req.files : []
@@ -897,15 +897,14 @@ app.post('/api/server/page/media-post', pageMediaUpload.array('media', 10), asyn
   if (videos.length > 1) {
     return res.status(400).json({ success: false, error: 'Only one video can be uploaded per post.' })
   }
-  if (videos.length === 1 && images.length > 0) {
-    return res.status(400).json({ success: false, error: 'Please upload either images OR a video (not both).' })
-  }
   if (images.length > 10) {
     return res.status(400).json({ success: false, error: 'Maximum 10 images per post.' })
   }
 
   try {
-    // Video flow
+    const results = []
+
+    // Video flow (if present)
     if (videos.length === 1) {
       const vid = videos[0]
       const saved = await persistUploadedMediaFile(vid)
@@ -927,19 +926,25 @@ app.post('/api/server/page/media-post', pageMediaUpload.array('media', 10), asyn
       }
       const postId = data?.id || null
       const facebookUrl = buildFacebookPermalinkFromPostId(postId)
-      return res.json({
-        success: true,
+      results.push({
+        mediaType: 'video',
         postId,
         facebookUrl,
-        mediaType: 'video',
-        media: saved?.urlPath ? [{ kind: 'video', url: saved.urlPath, name: vid?.originalname || '' }] : [{ kind: 'video' }]
+        media: saved?.urlPath
+          ? [{ kind: 'video', url: saved.urlPath, name: vid?.originalname || '' }]
+          : [{ kind: 'video' }]
       })
     }
 
-    // Multi-image flow (or message-only fallback)
+    // Multi-image flow (if present)
     if (images.length > 0) {
       const uploaded = []
+      const persisted = []
       for (const img of images) {
+        const saved = await persistUploadedMediaFile(img)
+        if (saved?.urlPath) {
+          persisted.push({ kind: 'image', url: saved.urlPath, name: img?.originalname || '' })
+        }
         const ur = await uploadPagePhoto({
           pageId: SERVER_PAGE_ID,
           pageAccessToken: SERVER_PAGE_ACCESS_TOKEN,
@@ -981,7 +986,11 @@ app.post('/api/server/page/media-post', pageMediaUpload.array('media', 10), asyn
       }
       const postId = pd?.id || null
       const facebookUrl = buildFacebookPermalinkFromPostId(postId)
-      return res.json({ success: true, postId, facebookUrl, mediaType: 'images', imagesCount: images.length })
+      results.push({ mediaType: 'images', postId, facebookUrl, imagesCount: images.length, media: persisted })
+    }
+
+    if (results.length) {
+      return res.json({ success: true, results })
     }
 
     // Message-only fallback
@@ -1005,7 +1014,7 @@ app.post('/api/server/page/media-post', pageMediaUpload.array('media', 10), asyn
     }
     const postId = data?.id || null
     const facebookUrl = buildFacebookPermalinkFromPostId(postId)
-    return res.json({ success: true, postId, facebookUrl, mediaType: 'text' })
+    return res.json({ success: true, results: [{ mediaType: 'text', postId, facebookUrl }] })
   } catch (e) {
     return res.status(500).json({ success: false, error: e?.message || 'Failed to publish media post.' })
   }
@@ -1264,7 +1273,7 @@ app.post('/api/page/photo-post', pageImageUpload.single('image'), async (req, re
  * Web app: post media (multiple images OR single video) to a Facebook Page using session tokens.
  * Form fields: pageId, message?, files: media[]
  */
-app.post('/api/page/media-post', pageMediaUpload.array('media', 10), async (req, res) => {
+app.post('/api/page/media-post', pageMediaUpload.array('media', 11), async (req, res) => {
   const s = requireAuth(req, res)
   if (!s) return
 
@@ -1295,9 +1304,6 @@ app.post('/api/page/media-post', pageMediaUpload.array('media', 10), async (req,
   if (videos.length > 1) {
     return res.status(400).json({ success: false, error: 'Only one video can be uploaded per post.' })
   }
-  if (videos.length === 1 && images.length > 0) {
-    return res.status(400).json({ success: false, error: 'Please upload either images OR a video (not both).' })
-  }
   if (images.length > 10) {
     return res.status(400).json({ success: false, error: 'Maximum 10 images per post.' })
   }
@@ -1311,7 +1317,9 @@ app.post('/api/page/media-post', pageMediaUpload.array('media', 10), async (req,
   }
 
   try {
-    // Single video flow
+    const results = []
+
+    // Single video flow (if present)
     if (videos.length === 1) {
       const vid = videos[0]
       const saved = await persistUploadedMediaFile(vid)
@@ -1349,20 +1357,26 @@ app.post('/api/page/media-post', pageMediaUpload.array('media', 10), async (req,
 
       const postId = data?.id || null
       const facebookUrl = buildFacebookPermalinkFromPostId(postId)
-      return res.json({
-        success: true,
+      results.push({
+        mediaType: 'video',
         postId,
         facebookUrl,
-        mediaType: 'video',
-        media: saved?.urlPath ? [{ kind: 'video', url: saved.urlPath, name: vid?.originalname || '' }] : [{ kind: 'video' }]
+        media: saved?.urlPath
+          ? [{ kind: 'video', url: saved.urlPath, name: vid?.originalname || '' }]
+          : [{ kind: 'video' }]
       })
     }
 
-    // Multi-image flow
+    // Multi-image flow (if present)
     if (images.length > 0) {
       const uploaded = []
+      const persisted = []
 
       for (const img of images) {
+        const saved = await persistUploadedMediaFile(img)
+        if (saved?.urlPath) {
+          persisted.push({ kind: 'image', url: saved.urlPath, name: img?.originalname || '' })
+        }
         let ur = await uploadPagePhoto({
           pageId,
           pageAccessToken: page.access_token,
@@ -1439,7 +1453,11 @@ app.post('/api/page/media-post', pageMediaUpload.array('media', 10), async (req,
       }
       const postId = pd?.id || null
       const facebookUrl = buildFacebookPermalinkFromPostId(postId)
-      return res.json({ success: true, postId, facebookUrl, mediaType: 'images', imagesCount: images.length })
+      results.push({ mediaType: 'images', postId, facebookUrl, imagesCount: images.length, media: persisted })
+    }
+
+    if (results.length) {
+      return res.json({ success: true, results })
     }
 
     // Message-only fallback
@@ -1491,7 +1509,7 @@ app.post('/api/page/media-post', pageMediaUpload.array('media', 10), async (req,
     }
     const postId = data?.id || null
     const facebookUrl = buildFacebookPermalinkFromPostId(postId)
-    return res.json({ success: true, postId, facebookUrl, mediaType: 'text' })
+    return res.json({ success: true, results: [{ mediaType: 'text', postId, facebookUrl }] })
   } catch (e) {
     return res.status(500).json({ success: false, error: e?.message || 'Failed to publish media post.' })
   }
@@ -2014,6 +2032,23 @@ app.get('/api/lgu/feed', async (req, res) => {
   } catch (e) {
     return res.status(500).json({ success: false, error: e?.message || 'Failed to fetch LGU feed.' })
   }
+})
+
+// -----------------------------------------------------------------------------
+// Multer error handling (return JSON instead of HTML)
+// -----------------------------------------------------------------------------
+app.use((err, _req, res, next) => {
+  if (err instanceof multer.MulterError) {
+    const code = String(err.code || '')
+    if (code === 'LIMIT_FILE_COUNT') {
+      return res.status(400).json({ success: false, error: 'Too many files. Max is 10 images + 1 video (11 total).' })
+    }
+    if (code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ success: false, error: 'File too large. Max 50MB per file.' })
+    }
+    return res.status(400).json({ success: false, error: err.message || 'Upload error.' })
+  }
+  return next(err)
 })
 
 app.listen(PORT, () => {
