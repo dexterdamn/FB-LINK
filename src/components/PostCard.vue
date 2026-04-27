@@ -1,5 +1,18 @@
 <template>
   <div class="post-card card hover-shadow">
+    <Teleport to="body">
+      <div v-if="showOperationOverlay" class="fullscreen-loading" role="status" aria-live="polite">
+        <div class="fullscreen-loading__panel" role="presentation">
+          <div class="fullscreen-loading__spinnerWrap" aria-hidden="true">
+            <span class="fullscreen-loading__spinner"></span>
+          </div>
+          <div class="fullscreen-loading__content">
+            <div class="fullscreen-loading__title">{{ operationOverlayTitle }}</div>
+            <div class="fullscreen-loading__subtitle">{{ operationOverlaySubtitle }}</div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
     <ConfirmDialog
       :open="deleteConfirmOpen"
       title="Delete post?"
@@ -29,6 +42,31 @@
             <textarea v-model="editContent" class="edit-textarea" rows="5" maxlength="500" />
             <span class="edit-hint">{{ (editContent || '').length }}/500</span>
           </label>
+          <div class="edit-field">
+            <div class="edit-image-row">
+              <span class="edit-label">Image (optional)</span>
+              <button
+                v-if="editImagePreviewUrl"
+                type="button"
+                class="btn btn-secondary btn-small"
+                :disabled="editSaving"
+                @click="clearEditImage"
+              >
+                Remove
+              </button>
+            </div>
+            <input
+              ref="editFileInputRef"
+              class="edit-file"
+              type="file"
+              accept="image/*"
+              :disabled="editSaving"
+              @change="onEditFileChange"
+            />
+            <div v-if="editImagePreviewUrl" class="edit-preview">
+              <img :src="editImagePreviewUrl" alt="Selected image preview" />
+            </div>
+          </div>
           <div class="edit-actions">
             <button type="button" class="btn btn-secondary" :disabled="editSaving" @click="closeEdit">
               Cancel
@@ -202,9 +240,36 @@ const editOpen = ref(false)
 const editContent = ref('')
 const editSaving = ref(false)
 const editDialogRef = ref(null)
+const editImageFile = ref(null)
+const editImagePreviewUrl = ref('')
+const editFileInputRef = ref(null)
+const operationOverlayOpen = ref(false)
+const operationOverlayTitle = ref('')
+const operationOverlaySubtitle = ref('')
 
 const canDelete = computed(() => props.showDeleteOption)
 const canSaveEdit = computed(() => String(editContent.value || '').trim().length > 0)
+const showOperationOverlay = computed(() => operationOverlayOpen.value)
+
+async function runWithOverlay(
+  { title, subtitle, minMs = 2000 },
+  fn
+) {
+  operationOverlayTitle.value = title
+  operationOverlaySubtitle.value = subtitle
+  operationOverlayOpen.value = true
+  const startedAt = performance.now()
+  await nextTick()
+
+  try {
+    return await fn()
+  } finally {
+    const elapsedMs = performance.now() - startedAt
+    const remainingMs = Math.max(0, minMs - elapsedMs)
+    if (remainingMs) await new Promise((r) => window.setTimeout(r, remainingMs))
+    operationOverlayOpen.value = false
+  }
+}
 
 /** Permalink to the post on the Facebook Page (Graph returns pageId_postId). No personal-timeline sharer. */
 const facebookPagePostUrl = computed(() => {
@@ -286,6 +351,9 @@ const handleEdit = async () => {
   menuOpen.value = false
   shareMenuOpen.value = false
   editContent.value = String(props.post?.content || '')
+  editImageFile.value = null
+  editImagePreviewUrl.value = typeof props.post?.image === 'string' ? props.post.image : ''
+  if (editFileInputRef.value) editFileInputRef.value.value = ''
   editOpen.value = true
   await nextTick()
   editDialogRef.value?.focus?.()
@@ -296,63 +364,201 @@ const closeEdit = () => {
   editOpen.value = false
 }
 
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result || ''))
+    reader.onerror = () => reject(new Error('Failed to read image file.'))
+    reader.readAsDataURL(file)
+  })
+}
+
+const onEditFileChange = async (e) => {
+  const file = e?.target?.files?.[0]
+  if (!file) return
+  editImageFile.value = file
+  try {
+    editImagePreviewUrl.value = await readFileAsDataUrl(file)
+  } catch (err) {
+    editImageFile.value = null
+    editImagePreviewUrl.value = ''
+    toast.error(err?.message || 'Could not load image preview.')
+  }
+}
+
+const clearEditImage = () => {
+  editImageFile.value = null
+  editImagePreviewUrl.value = ''
+  if (editFileInputRef.value) editFileInputRef.value.value = ''
+}
+
 const saveEdit = async () => {
   const nextContent = String(editContent.value || '').trim()
   if (!nextContent) return
 
   editSaving.value = true
-  try {
-    const id = String(props.post?.id || '')
-    const looksLikeGraphPost = typeof id === 'string' && /^\d+_\d+$/.test(id)
+  await runWithOverlay(
+    { title: 'Updating post', subtitle: 'Saving your changes…' },
+    async () => {
+      const id = String(props.post?.id || '')
+      const looksLikeGraphPost = typeof id === 'string' && /^\d+_\d+$/.test(id)
+      const pageIdMatch = /^(\d+)_\d+$/.exec(id)
+      const pageId = pageIdMatch ? pageIdMatch[1] : ''
+      const hadLocalImage = typeof props.post?.image === 'string' && String(props.post.image).trim().length > 0
+      const imageNowRemoved = hadLocalImage && !editImageFile.value && !String(editImagePreviewUrl.value || '').trim()
 
-    // If this is a real Facebook Page post and user is signed in, update it on Facebook too.
-    if (looksLikeGraphPost && props.isAuthenticated) {
-      const base = String(import.meta.env.BASE_URL || '/')
-      const cleanBase = base.endsWith('/') ? base : `${base}/`
-      const url = `${cleanBase}api/lgu/posts/${encodeURIComponent(id)}`
-      const r = await fetch(url, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: nextContent })
-      })
-      const j = await r.json().catch(() => ({}))
-      if (!r.ok || !j?.success) {
-        toast.error(j?.error || `Failed to edit on Facebook (${r.status}).`)
+      // If this is a real Facebook Page post and user is signed in, update it on Facebook too.
+      if (looksLikeGraphPost && props.isAuthenticated) {
+        // Removing an image from an existing Facebook post is not supported.
+        // Workaround: create a new TEXT post without image, then delete the old post.
+        if (imageNowRemoved && pageId) {
+          const base = String(import.meta.env.BASE_URL || '/')
+          const cleanBase = base.endsWith('/') ? base : `${base}/`
+          const url = `${cleanBase}api/lgu/posts`
+
+          const r = await fetch(url, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pageId: String(pageId), message: nextContent })
+          })
+          const j = await r.json().catch(() => ({}))
+          if (!r.ok || !j?.success) {
+            toast.error(j?.error || `Failed to remove image on Facebook (${r.status}).`)
+            return
+          }
+
+          try {
+            const del = await facebookService.deletePost(id)
+            if (!del?.success) {
+              toast.error(del?.error || 'Removed image by creating a new Page post, but failed to delete the old one.')
+            }
+          } catch {
+            // ignore delete errors
+          }
+
+          const newPostId = j?.postId ? String(j.postId) : ''
+          const newFacebookUrl = j?.facebookUrl ? String(j.facebookUrl) : ''
+          const updates = {
+            content: nextContent,
+            image: null
+          }
+          if (newPostId) updates.id = newPostId
+          if (newFacebookUrl) updates.facebookUrl = newFacebookUrl
+
+          const res = updatePost(props.post.id, updates)
+          if (!res?.success) {
+            toast.error(res?.error || 'Failed to update post.')
+            return
+          }
+
+          toast.success('Image removed on LGU Page (new text post).')
+          editOpen.value = false
+          return
+        }
+
+        // Facebook does not support replacing an image in-place on an existing post.
+        // If the user picked a new image, create a NEW photo post on the LGU Page,
+        // then (best-effort) delete the old post.
+        if (editImageFile.value && pageId) {
+          const base = String(import.meta.env.BASE_URL || '/')
+          const cleanBase = base.endsWith('/') ? base : `${base}/`
+          const url = `${cleanBase}api/page/photo-post`
+
+          const fd = new FormData()
+          fd.append('pageId', String(pageId))
+          fd.append('message', nextContent)
+          fd.append('image', editImageFile.value, editImageFile.value.name || 'photo.jpg')
+
+          const r = await fetch(url, { method: 'POST', credentials: 'include', body: fd })
+          const j = await r.json().catch(() => ({}))
+          if (!r.ok || !j?.success) {
+            toast.error(j?.error || `Failed to update image on Facebook (${r.status}).`)
+            return
+          }
+
+          try {
+            const del = await facebookService.deletePost(id)
+            if (!del?.success) {
+              toast.error(del?.error || 'Updated image by creating a new Page post, but failed to delete the old one.')
+            }
+          } catch {
+            // ignore delete errors
+          }
+
+          const newPostId = j?.postId ? String(j.postId) : ''
+          const newFacebookUrl = j?.facebookUrl ? String(j.facebookUrl) : ''
+          const updates = {
+            content: nextContent,
+            image: editImagePreviewUrl.value || null
+          }
+          if (newPostId) updates.id = newPostId
+          if (newFacebookUrl) updates.facebookUrl = newFacebookUrl
+
+          const res = updatePost(props.post.id, updates)
+          if (!res?.success) {
+            toast.error(res?.error || 'Failed to update post.')
+            return
+          }
+
+          toast.success('Post updated on LGU Page (new photo post).')
+          editOpen.value = false
+          return
+        }
+
+        // Text-only edits can be done in-place.
+        const base = String(import.meta.env.BASE_URL || '/')
+        const cleanBase = base.endsWith('/') ? base : `${base}/`
+        const url = `${cleanBase}api/lgu/posts/${encodeURIComponent(id)}`
+        const r = await fetch(url, {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: nextContent })
+        })
+        const j = await r.json().catch(() => ({}))
+        if (!r.ok || !j?.success) {
+          toast.error(j?.error || `Failed to edit on Facebook (${r.status}).`)
+          return
+        }
+      }
+
+      const res = updatePost(props.post.id, { content: nextContent, image: editImagePreviewUrl.value || null })
+      if (!res?.success) {
+        toast.error(res?.error || 'Failed to update post.')
         return
       }
+      toast.success('Post updated.')
+      editOpen.value = false
     }
-
-    const res = updatePost(props.post.id, { content: nextContent })
-    if (!res?.success) {
-      toast.error(res?.error || 'Failed to update post.')
-      return
-    }
-    toast.success('Post updated.')
-    editOpen.value = false
-  } finally {
+  ).finally(() => {
     editSaving.value = false
-  }
+  })
 }
 
 const confirmDelete = async () => {
   deleteConfirmOpen.value = false
-
   const id = props.post.id
-  // Facebook Graph Page posts look like "<numericPageId>_<numericPostId>".
-  // Local app IDs also contain "_" (e.g. "post_123"), so use a strict numeric check.
-  const looksLikeGraphPost = typeof id === 'string' && /^\d+_\d+$/.test(id)
 
-  // Always allow deleting locally (web app), even if not logged in.
-  // If we can, also attempt to delete on the Facebook Page; failures should not block local deletion.
-  if (looksLikeGraphPost && props.isAuthenticated) {
-    const res = await facebookService.deletePost(id)
-    if (!res.success) {
-      toast.error(res.error || 'Deleted in the app, but failed to delete on Facebook.')
+  await runWithOverlay(
+    { title: 'Deleting post', subtitle: 'Removing this post…' },
+    async () => {
+      // Facebook Graph Page posts look like "<numericPageId>_<numericPostId>".
+      // Local app IDs also contain "_" (e.g. "post_123"), so use a strict numeric check.
+      const looksLikeGraphPost = typeof id === 'string' && /^\d+_\d+$/.test(id)
+
+      // Always allow deleting locally (web app), even if not logged in.
+      // If we can, also attempt to delete on the Facebook Page; failures should not block local deletion.
+      if (looksLikeGraphPost && props.isAuthenticated) {
+        const res = await facebookService.deletePost(id)
+        if (!res.success) {
+          toast.error(res.error || 'Deleted in the app, but failed to delete on Facebook.')
+        }
+      }
+
+      emit('post-deleted', id)
     }
-  }
-
-  emit('post-deleted', id)
+  )
 }
 
 const handleLike = () => {
@@ -450,6 +656,33 @@ const copyShareLink = () => {
   display: flex;
   justify-content: flex-end;
   gap: var(--spacing-sm);
+}
+
+.edit-image-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.edit-file {
+  width: 100%;
+}
+
+.edit-preview {
+  margin-top: 10px;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background-color: var(--bg-tertiary);
+}
+
+.edit-preview img {
+  width: 100%;
+  height: auto;
+  max-height: 360px;
+  object-fit: cover;
+  display: block;
 }
 
 .post-card {
